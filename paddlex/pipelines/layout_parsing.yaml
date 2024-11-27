@@ -5,10 +5,5 @@ Global:
   
 Pipeline:
   layout_model: RT-DETR-H_layout_17cls
-  table_model: SLANet_plus
-  formula_rec_model: LaTeX_OCR_rec
-  text_det_model: PP-OCRv4_server_det
-  text_rec_model: PP-OCRv4_server_rec
-  seal_text_det_model: PP-OCRv4_server_seal_det
-  doc_image_unwarp_model: None
-  doc_image_ori_cls_model: None
+  text_det_model: PP-OCRv4_mobile_det
+  text_rec_model: PP-OCRv4_mobile_rec
