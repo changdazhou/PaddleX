@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import shutil
 import numpy as np
 from ...results import *
 from ...components import *
@@ -108,7 +109,7 @@ class LayoutParsingPipeline(BasePipeline):
     ):
         self.set_predictor(**kwargs)
         if os.path.exists(TEMP_DIR):
-            os.removedirs(TEMP_DIR)
+            shutil.rmtree(TEMP_DIR)
             os.mkdir(TEMP_DIR)
         # get oricls and uvdoc results
         img_info_list = list(self.img_reader(inputs))[0]
