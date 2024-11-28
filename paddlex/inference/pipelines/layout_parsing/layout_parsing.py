@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import numpy as np
 from ...results import *
 from ...components import *
@@ -24,6 +25,7 @@ from ..table_recognition.utils import (
     get_ori_coordinate_for_table,
     TableMatch,
 )
+from ....utils.cache import TEMP_DIR
 
 
 class LayoutParsingPipeline(BasePipeline):
@@ -105,6 +107,7 @@ class LayoutParsingPipeline(BasePipeline):
         **kwargs,
     ):
         self.set_predictor(**kwargs)
+        os.removedirs(TEMP_DIR)
         # get oricls and uvdoc results
         img_info_list = list(self.img_reader(inputs))[0]
         img_list = [img_info["img"] for img_info in img_info_list]
