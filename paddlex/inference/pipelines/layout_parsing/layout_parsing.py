@@ -108,9 +108,6 @@ class LayoutParsingPipeline(BasePipeline):
         **kwargs,
     ):
         self.set_predictor(**kwargs)
-        if os.path.exists(TEMP_DIR):
-            shutil.rmtree(TEMP_DIR)
-            os.mkdir(TEMP_DIR)
         # get oricls and uvdoc results
         img_info_list = list(self.img_reader(inputs))[0]
         img_list = [img_info["img"] for img_info in img_info_list]
@@ -170,16 +167,13 @@ class LayoutParsingPipeline(BasePipeline):
             ocr_res = {
                 "dt_polys": [],
                 "rec_text": [],
-                "input_path": layout_pred["input_path"],
             }
 
             if use_ocr_without_layout:
                 ocr_res = get_ocr_res(self.ocr_pipeline, single_img)
-                ocr_res["input_path"] = layout_pred["input_path"]
                 for idx, single_dt_poly in enumerate(ocr_res["dt_polys"]):
                     structure_res.append(
                         {
-                            "input_path": ocr_res["input_path"],
                             "layout_bbox": convert_4point2rect(single_dt_poly),
                             "text_without_layout": ocr_res["rec_text"][idx],
                         }
@@ -189,7 +183,6 @@ class LayoutParsingPipeline(BasePipeline):
                 ocr_res["dt_polys"].extend(layout_ocr_res["dt_polys"])
                 ocr_res["rec_text"].extend(layout_ocr_res["rec_text"])
                 ocr_res["rec_score"].extend(layout_ocr_res["rec_score"])
-                ocr_res["input_path"] = single_img_res["input_path"]
 
             # sort the layout result by the left top point of the box
             structure_res = sorted_layout_boxes(structure_res, w=single_img.shape[1])
@@ -212,8 +205,9 @@ class LayoutParsingPipeline(BasePipeline):
             input_path = inputs.get("input_path", None)
             if input_path:
                 try:
-                    os.remove(input_path)
+                    os.remove(os.path.join(TEMP_DIR, input_path))
                 except:
+                    print("delete input_path error")
                     pass
             for key in inputs.keys():
                 if isinstance(inputs[key], dict):
