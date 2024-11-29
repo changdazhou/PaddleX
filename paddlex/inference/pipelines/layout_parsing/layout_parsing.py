@@ -202,4 +202,19 @@ class LayoutParsingPipeline(BasePipeline):
             single_img_res["ocr_result"] = ocr_res
             single_img_res["layout_parsing_result"] = structure_res
             single_img_res["layout_parsing_result"]["page_id"] = page_id + 1
+
+            self.delete_input_path(single_img_res)
+
             yield VisualResult(single_img_res, page_id, inputs)
+
+    def delete_input_path(self, inputs=None):
+        if isinstance(inputs, dict):
+            input_path = inputs.get("input_path", None)
+            if input_path:
+                try:
+                    os.remove(input_path)
+                except:
+                    pass
+            for key in inputs.keys():
+                if isinstance(inputs[key], dict):
+                    self.delete_input_path(inputs[key])
