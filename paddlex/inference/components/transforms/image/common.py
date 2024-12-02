@@ -111,18 +111,15 @@ class ReadImage(_BaseRead):
             return np.random.randint(0, 256, (*size, 3), dtype=np.uint8)
 
         def process_ndarray(img):
-            with temp_file_manager.temp_file_context(suffix=".png") as temp_file:
-                img_path = Path(temp_file.name)
-                self._writer.write(img_path, img)
-                if self.format == "RGB":
-                    img = img[:, :, ::-1]
-                return {
-                    "input_path": img_path,
-                    "img": img,
-                    "img_size": [img.shape[1], img.shape[0]],
-                    "ori_img": deepcopy(img),
-                    "ori_img_size": deepcopy([img.shape[1], img.shape[0]]),
-                }
+            if self.format == "RGB":
+                img = img[:, :, ::-1]
+            return {
+                "input_path": None,
+                "img": img,
+                "img_size": [img.shape[1], img.shape[0]],
+                "ori_img": deepcopy(img),
+                "ori_img_size": deepcopy([img.shape[1], img.shape[0]]),
+            }
 
         if INFER_BENCHMARK and img is None:
             for _ in range(INFER_BENCHMARK_ITER):

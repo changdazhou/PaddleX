@@ -227,18 +227,17 @@ class CropByBoxes(BaseComponent):
     """Crop Image by Box"""
 
     YIELD_BATCH = False
-    INPUT_KEYS = ["input_path", "boxes"]
+    INPUT_KEYS = ["ori_img", "boxes"]
     OUTPUT_KEYS = ["img", "box", "label"]
-    DEAULT_INPUTS = {"input_path": "input_path", "boxes": "boxes"}
+    DEAULT_INPUTS = {"img": "ori_img", "boxes": "boxes"}
     DEAULT_OUTPUTS = {"img": "img", "box": "box", "label": "label"}
 
     def __init__(self):
         super().__init__()
         self._reader = ImageReader(backend="opencv")
 
-    def apply(self, input_path, boxes):
+    def apply(self, img, boxes):
         output_list = []
-        img = self._reader.read(input_path)
         for bbox in boxes:
             label_id = bbox["cls_id"]
             box = bbox["coordinate"]
