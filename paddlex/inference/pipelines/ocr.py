@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from ..components import SortBoxes, CropByPolys
 from ..results import OCRResult
 from .base import BasePipeline
@@ -75,6 +76,10 @@ class OCRPipeline(BasePipeline):
             if len(single_img_res["dt_polys"]) > 0:
                 all_subs_of_img = list(self._crop_by_polys(single_img_res))
                 for rec_res in self.text_rec_model(all_subs_of_img):
+                    try:
+                        os.remove(rec_res["input_path"])
+                    except:
+                        pass
                     single_img_res["rec_text"].append(rec_res["rec_text"])
                     single_img_res["rec_score"].append(rec_res["rec_score"])
             yield OCRResult(single_img_res)

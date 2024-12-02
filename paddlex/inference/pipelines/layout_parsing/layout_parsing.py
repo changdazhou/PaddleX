@@ -77,7 +77,6 @@ class LayoutParsingPipeline(BasePipeline):
         self._crop_by_boxes = CropByBoxes()
         self._match = TableMatch(filter_ocr_result=False)
         self.img_reader = ReadImage(format="BGR")
-        self.cropper = CropByBoxes()
 
     def set_predictor(
         self,
@@ -155,13 +154,13 @@ class LayoutParsingPipeline(BasePipeline):
                         ocr_res_with_layout.append(sub_ocr_res)
                         structure_res.append(
                             {
-                                "input_path": sub_ocr_res["input_path"],
                                 "layout_bbox": box,
                                 f"{layout_label}": "\n".join(sub_ocr_res["rec_text"]),
                             }
                         )
                     if mask_flag:
                         single_img[ymin:ymax, xmin:xmax, :] = 255
+                    self.delete_input_path(sub_ocr_res)
 
             use_ocr_without_layout = kwargs.get("use_ocr_without_layout", True)
             ocr_res = {
@@ -188,7 +187,6 @@ class LayoutParsingPipeline(BasePipeline):
             structure_res = sorted_layout_boxes(structure_res, w=single_img.shape[1])
             structure_res = LayoutParsingResult(
                 {
-                    "input_path": layout_pred["input_path"],
                     "parsing_result": structure_res,
                 }
             )
@@ -197,6 +195,8 @@ class LayoutParsingPipeline(BasePipeline):
             single_img_res["layout_parsing_result"]["page_id"] = page_id + 1
 
             self.delete_input_path(single_img_res)
+
+            # import pdb; pdb.set_trace()
 
             yield VisualResult(single_img_res, page_id, inputs)
 
@@ -207,7 +207,6 @@ class LayoutParsingPipeline(BasePipeline):
                 try:
                     os.remove(os.path.join(TEMP_DIR, input_path))
                 except:
-                    print("delete input_path error")
                     pass
             for key in inputs.keys():
                 if isinstance(inputs[key], dict):
