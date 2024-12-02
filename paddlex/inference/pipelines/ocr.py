@@ -71,6 +71,7 @@ class OCRPipeline(BasePipeline):
             single_img_res = (
                 det_res if self.is_curve else next(self._sort_boxes(det_res))
             )
+            det_res.pop("ori_img")
             single_img_res["rec_text"] = []
             single_img_res["rec_score"] = []
             if len(single_img_res["dt_polys"]) > 0:

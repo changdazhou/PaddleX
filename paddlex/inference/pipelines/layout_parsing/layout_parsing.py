@@ -14,6 +14,7 @@
 
 import os
 import shutil
+import time
 import numpy as np
 from ...results import *
 from ...components import *
@@ -128,6 +129,7 @@ class LayoutParsingPipeline(BasePipeline):
             ocr_res_with_layout = []
             if len(layout_pred["boxes"]) > 0:
                 subs_of_img = list(self._crop_by_boxes(layout_pred))
+                layout_pred.pop("ori_img")
                 # get cropped images
                 for sub in subs_of_img:
                     box = sub["box"]
@@ -143,6 +145,7 @@ class LayoutParsingPipeline(BasePipeline):
                         sub_ocr_res["dt_polys"] = get_ori_coordinate_for_table(
                             xmin, ymin, sub_ocr_res["dt_polys"]
                         )
+                    sub_ocr_res.pop("ori_img")
                     layout_label = sub["label"].lower()
                     # Adapt the user label definition to specify behavior.
                     if not sub["label"].lower() in [
@@ -160,7 +163,6 @@ class LayoutParsingPipeline(BasePipeline):
                         )
                     if mask_flag:
                         single_img[ymin:ymax, xmin:xmax, :] = 255
-                    self.delete_input_path(sub_ocr_res)
 
             use_ocr_without_layout = kwargs.get("use_ocr_without_layout", True)
             ocr_res = {
@@ -170,6 +172,7 @@ class LayoutParsingPipeline(BasePipeline):
 
             if use_ocr_without_layout:
                 ocr_res = get_ocr_res(self.ocr_pipeline, single_img)
+                ocr_res.pop("ori_img")
                 for idx, single_dt_poly in enumerate(ocr_res["dt_polys"]):
                     structure_res.append(
                         {
