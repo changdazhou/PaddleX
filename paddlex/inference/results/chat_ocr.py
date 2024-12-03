@@ -65,6 +65,8 @@ class VisualResult(BaseResult):
         layout_save_path = f"{save_path}_layout.jpg"
         ocr_save_path = f"{save_path}_ocr.jpg"
         table_save_path = f"{save_path}_table"
+        self["layout_result"].pop("ori_img")
+        self["ocr_result"].pop("ori_img")
         self["input_path"] = layout_save_path
         if self.get("table_result", None) is not None:
             table_result_num = len(self["table_result"])

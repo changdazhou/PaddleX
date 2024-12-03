@@ -59,7 +59,7 @@ class OCRResult(CVResult):
         boxes = self["dt_polys"]
         txts = self["rec_text"]
         scores = self["rec_score"]
-        image = self._img_reader.read(self["input_path"])
+        image = Image.fromarray(self["ori_img"])
         h, w = image.height, image.width
         img_left = image.copy()
         img_right = np.ones((h, w, 3), dtype=np.uint8) * 255

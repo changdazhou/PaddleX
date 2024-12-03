@@ -81,6 +81,7 @@ class DetResult(CVResult):
     def _to_img(self):
         """apply"""
         boxes = self["boxes"]
-        image = self._img_reader.read(self["input_path"])
+        print(self.keys())
+        image = Image.fromarray(self["ori_img"])
         image = draw_box(image, boxes)
         return image

@@ -5,5 +5,7 @@ Global:
   
 Pipeline:
   layout_model: RT-DETR-H_layout_17cls
-  text_det_model: PP-OCRv4_mobile_det
-  text_rec_model: PP-OCRv4_mobile_rec
+  text_det_model: PP-OCRv4_server_det
+  text_rec_model: PP-OCRv4_server_rec
+  # text_det_model: PP-OCRv4_mobile_det
+  # text_rec_model: PP-OCRv4_mobile_rec

@@ -20,6 +20,7 @@ from ...results import *
 from ...components import *
 from ..ocr import OCRPipeline
 from ....utils import logging
+from .utils import *
 from ..ppchatocrv3.utils import *
 from ..base import BasePipeline
 from ..table_recognition.utils import (
@@ -111,8 +112,12 @@ class LayoutParsingPipeline(BasePipeline):
         # get oricls and uvdoc results
         img_info_list = list(self.img_reader(inputs))[0]
         img_list = [img_info["img"] for img_info in img_info_list]
-        for idx, (img_info, layout_pred) in enumerate(
-            zip(img_info_list, self.layout_predictor(img_list))
+        for idx, (img_info, layout_pred, ocr_res) in enumerate(
+            zip(
+                img_info_list,
+                self.layout_predictor(img_list),
+                self.ocr_pipeline(img_list),
+            )
         ):
             page_id = idx
             single_img_res = {
@@ -126,26 +131,15 @@ class LayoutParsingPipeline(BasePipeline):
             single_img_res["layout_result"] = layout_pred
             single_img = img_info["img"]
             structure_res = []
-            ocr_res_with_layout = []
+            dt_boxes = convert_points_to_boxes(ocr_res["dt_polys"])
+            ocr_res["dt_boxes"] = dt_boxes
+            # ocr_res.pop("ori_img")
             if len(layout_pred["boxes"]) > 0:
                 subs_of_img = list(self._crop_by_boxes(layout_pred))
-                layout_pred.pop("ori_img")
+                # layout_pred.pop("ori_img")
                 # get cropped images
                 for sub in subs_of_img:
                     box = sub["box"]
-                    xmin, ymin, xmax, ymax = [int(i) for i in box]
-                    mask_flag = True
-                    if self.recovery and recovery:
-                        # TODO: Why use the entire image?
-                        wht_im = np.ones(single_img.shape, dtype=single_img.dtype) * 255
-                        wht_im[ymin:ymax, xmin:xmax, :] = sub["img"]
-                        sub_ocr_res = get_ocr_res(self.ocr_pipeline, wht_im)
-                    else:
-                        sub_ocr_res = get_ocr_res(self.ocr_pipeline, sub)
-                        sub_ocr_res["dt_polys"] = get_ori_coordinate_for_table(
-                            xmin, ymin, sub_ocr_res["dt_polys"]
-                        )
-                    sub_ocr_res.pop("ori_img")
                     layout_label = sub["label"].lower()
                     # Adapt the user label definition to specify behavior.
                     if not sub["label"].lower() in [
@@ -154,37 +148,23 @@ class LayoutParsingPipeline(BasePipeline):
                         "img",
                         "fig",
                     ]:
-                        ocr_res_with_layout.append(sub_ocr_res)
+                        sub_ocr_res, use_crop_ocr = get_sub_regions_ocr_res(
+                            ocr_res, box, flag_within=True
+                        )
+                        if use_crop_ocr:
+                            wht_im = (
+                                np.ones(single_img.shape, dtype=single_img.dtype) * 255
+                            )
+                            xmin, ymin, xmax, ymax = [int(i) for i in box]
+                            wht_im[ymin:ymax, xmin:xmax, :] = sub["img"]
+                            sub_ocr_res = get_ocr_res(self.ocr_pipeline, wht_im)
+                            # sub_ocr_res = get_ocr_res(self.ocr_pipeline,sub)
                         structure_res.append(
                             {
                                 "layout_bbox": box,
                                 f"{layout_label}": "\n".join(sub_ocr_res["rec_text"]),
                             }
                         )
-                    if mask_flag:
-                        single_img[ymin:ymax, xmin:xmax, :] = 255
-
-            use_ocr_without_layout = kwargs.get("use_ocr_without_layout", True)
-            ocr_res = {
-                "dt_polys": [],
-                "rec_text": [],
-            }
-
-            if use_ocr_without_layout:
-                ocr_res = get_ocr_res(self.ocr_pipeline, single_img)
-                ocr_res.pop("ori_img")
-                for idx, single_dt_poly in enumerate(ocr_res["dt_polys"]):
-                    structure_res.append(
-                        {
-                            "layout_bbox": convert_4point2rect(single_dt_poly),
-                            "text_without_layout": ocr_res["rec_text"][idx],
-                        }
-                    )
-            # update ocr result
-            for layout_ocr_res in ocr_res_with_layout:
-                ocr_res["dt_polys"].extend(layout_ocr_res["dt_polys"])
-                ocr_res["rec_text"].extend(layout_ocr_res["rec_text"])
-                ocr_res["rec_score"].extend(layout_ocr_res["rec_score"])
 
             # sort the layout result by the left top point of the box
             structure_res = sorted_layout_boxes(structure_res, w=single_img.shape[1])
