@@ -653,7 +653,7 @@ class _TableRecognitionPipelineV2(BasePipeline):
                 box_tuple = tuple(box)
                 if box_tuple not in seen:
                     seen.add(box_tuple)
-                    unique_boxes.append(box)
+                    unique_boxes.append(np.array(box))
 
             return unique_boxes
 
@@ -685,8 +685,15 @@ class _TableRecognitionPipelineV2(BasePipeline):
                 split_texts = []
                 for box in split_boxes:
                     x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                    if y2 - y1 > 1 and x2 - x1 > 1:
-                        ocr_result = list(
+                    ori_img_w = ori_img.shape[1]
+                    ori_img_h = ori_img.shape[0]
+                    if (
+                        y2 - y1 > 1
+                        and x2 - x1 > 1
+                        and y2 <= ori_img_h
+                        and x2 <= ori_img_w
+                    ):
+                        ocr_result = next(
                             self.general_ocr_pipeline.text_rec_model(
                                 ori_img[y1:y2, x1:x2, :]
                             )
@@ -706,7 +713,7 @@ class _TableRecognitionPipelineV2(BasePipeline):
                 new_texts.extend(split_texts)
             else:
                 # Keep original box and text
-                new_boxes.append(ocr_box)
+                new_boxes.append(np.array(ocr_box))
                 new_texts.append(text)
             i += 1
 
