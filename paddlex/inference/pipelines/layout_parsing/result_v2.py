@@ -274,6 +274,7 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
         parsing_res_list = self["parsing_res_list"]
         parsing_res_list = [
             {
+                "block_id": parsing_res.id,
                 "block_label": parsing_res.label,
                 "block_content": parsing_res.content,
                 "block_bbox": parsing_res.bbox,

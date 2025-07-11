@@ -42,7 +42,6 @@ from .utils import (
     gather_imgs,
     get_bbox_intersection,
     get_sub_regions_ocr_res,
-    remove_overlap_blocks,
     shrink_supplement_region_bbox,
     update_region_box,
 )
@@ -306,11 +305,11 @@ class _LayoutParsingPipelineV2(BasePipeline):
         doc_title_num = 0
 
         base_region_bbox = [65535, 65535, 0, 0]
-        layout_det_res = remove_overlap_blocks(
-            layout_det_res,
-            threshold=0.5,
-            smaller=True,
-        )
+        # layout_det_res = remove_overlap_blocks(
+        #     layout_det_res,
+        #     threshold=0.5,
+        #     smaller=True,
+        # )
 
         # convert formula_res_list to OCRResult format
         convert_formula_res_to_ocr_format(formula_res_list, overall_ocr_res)
@@ -688,7 +687,7 @@ class _LayoutParsingPipelineV2(BasePipeline):
             block_bbox = box_info["coordinate"]
             rec_res = {"boxes": [], "rec_texts": [], "rec_labels": []}
 
-            block = LayoutBlock(label=label, bbox=block_bbox)
+            block = LayoutBlock(label=label, bbox=block_bbox, id=box_idx)
 
             if label == "table" and len(table_res_list) > 0:
                 block.content = table_res_list[table_index]["pred_html"]
