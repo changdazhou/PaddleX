@@ -998,7 +998,6 @@ class _LayoutParsingPipelineV2(BasePipeline):
             doc_preprocessor_images = [
                 item["output_img"] for item in doc_preprocessor_results
             ]
-
             if not use_layout_gt:
                 layout_det_results = list(
                     self.layout_det_model(

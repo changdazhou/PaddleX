@@ -279,8 +279,9 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
                 "block_content": parsing_res.content,
                 "block_bbox": parsing_res.bbox,
                 "block_direction": parsing_res.direction,
+                "order": index
             }
-            for parsing_res in parsing_res_list
+            for index,parsing_res in enumerate(parsing_res_list)
         ]
         data["parsing_res_list"] = parsing_res_list
         data["region_det_res"] = self["region_det_res"]
