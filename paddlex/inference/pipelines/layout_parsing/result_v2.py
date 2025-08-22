@@ -424,6 +424,9 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
             "text": lambda block: block.content.replace("\n\n", "\n").replace(
                 "\n", "\n\n"
             ),
+            "vision_footnote": lambda block: block.content.replace("\n\n", "\n").replace(
+                "\n", "\n\n"
+            ),
             "abstract": partial(
                 format_first_line_func,
                 templates=["摘要", "abstract"],

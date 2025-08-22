@@ -941,34 +941,11 @@ def update_vision_child_blocks(
                 ref_block.order_label = "vision_title"
                 block.append_child_block(ref_block)
                 region.vision_title_block_idxes.remove(ref_block.index)
-            if ref_block.label in BLOCK_LABEL_MAP["text_labels"]:
-                if (
-                    not has_vision_footnote
-                    and ref_block.direction == block.direction
-                    and ref_block.long_side_length < block.long_side_length
-                    and nearest_edge_distance <= ref_block.text_line_height * 2
-                ):
-                    if (
-                        (
-                            ref_block.short_side_length < block.short_side_length
-                            and ref_block.long_side_length
-                            < 0.5 * block.long_side_length
-                            and abs(block_center[0] - ref_block_center[0]) < 10
-                        )
-                        or (
-                            block.bbox[0] - ref_block.bbox[0] < 10
-                            and ref_block.num_of_lines == 1
-                        )
-                        or (
-                            block.bbox[2] - ref_block.bbox[2] < 10
-                            and ref_block.num_of_lines == 1
-                        )
-                    ):
-                        has_vision_footnote = True
-                        ref_block.order_label = "vision_footnote"
-                        block.append_child_block(ref_block)
-                        region.normal_text_block_idxes.remove(ref_block.index)
-                break
+            if ref_block.label == "vision_footnote" and nearest_edge_distance <= ref_block.text_line_height * 2 and ref_block.index in region.normal_text_block_idxes:
+                has_vision_footnote = True
+                ref_block.order_label = "vision_footnote"
+                block.append_child_block(ref_block)
+                region.normal_text_block_idxes.remove(ref_block.index)
         for ref_block in post_blocks:
             if (
                 has_vision_footnote
@@ -988,35 +965,11 @@ def update_vision_child_blocks(
                 ref_block.order_label = "vision_title"
                 block.append_child_block(ref_block)
                 region.vision_title_block_idxes.remove(ref_block.index)
-            if ref_block.label in BLOCK_LABEL_MAP["text_labels"]:
-                if (
-                    not has_vision_footnote
-                    and ref_block.direction == block.direction
-                    and ref_block.long_side_length < block.long_side_length
-                    and nearest_edge_distance <= ref_block.text_line_height * 2
-                ):
-                    if (
-                        (
-                            ref_block.short_side_length < block.short_side_length
-                            and ref_block.long_side_length
-                            < 0.5 * block.long_side_length
-                            and abs(block_center[0] - ref_block_center[0]) < 10
-                        )
-                        or (
-                            block.bbox[0] - ref_block.bbox[0] < 10
-                            and ref_block.num_of_lines == 1
-                        )
-                        or (
-                            block.bbox[2] - ref_block.bbox[2] < 10
-                            and ref_block.num_of_lines == 1
-                        )
-                    ):
-                        has_vision_footnote = True
-                        ref_block.label = "vision_footnote"
-                        ref_block.order_label = "vision_footnote"
-                        block.append_child_block(ref_block)
-                        region.normal_text_block_idxes.remove(ref_block.index)
-                break
+            if ref_block.label == "vision_footnote" and nearest_edge_distance <= ref_block.text_line_height * 2 and ref_block.index in region.normal_text_block_idxes:
+                has_vision_footnote = True
+                ref_block.order_label = "vision_footnote"
+                block.append_child_block(ref_block)
+                region.normal_text_block_idxes.remove(ref_block.index)
         if has_vision_title:
             break
 
