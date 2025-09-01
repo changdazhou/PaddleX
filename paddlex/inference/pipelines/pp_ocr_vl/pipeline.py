@@ -187,6 +187,7 @@ class _PPOCRVLPipeline(BasePipeline):
                             "query": text_prompt,
                         },
                         skip_special_tokens=skip_special_tokens,
+                        use_cache=True,
                     )
                 )
                 vl_rec_result["image"] = block_img
@@ -200,8 +201,8 @@ class _PPOCRVLPipeline(BasePipeline):
                     result_str = (
                         result_str.replace("\(", " $ ")
                         .replace("\\)", " $ ")
-                        .replace("\\[", " ")
-                        .replace("\\]", " ")
+                        .replace("\\[", " $$ ")
+                        .replace("\\]", " $$ ")
                     )
                 if block_label == "table":
                     result_str = convert_otsl_to_html(result_str)

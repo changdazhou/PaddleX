@@ -334,9 +334,9 @@ class PPOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
             ),
             "image": format_image_func,
             "chart": format_image_func,
-            "formula": format_formula_func,
-            "display_formula": format_formula_func,
-            "inline_formula": format_formula_func,
+            "formula": format_text_func,
+            "display_formula": format_text_func,
+            "inline_formula": format_text_func,
             "table": format_table_func,
             "reference": partial(
                 format_first_line_func,

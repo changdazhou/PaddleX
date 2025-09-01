@@ -14,11 +14,11 @@ SubModules:
   VLRecognition:
     module_name: vl_recognition
     model_name: PaddleOCR-VL
-    # model_dir: /paddle/project/PaddleX/checkpoint-exp9
+    model_dir: /paddle/project/PaddleX/checkpoint-5774-1drope-pdformers
     batch_size: 1 
-    genai_config:
-      backend: vllm-server
-      server_url: http://10.214.40.11:8189/v1
+    # genai_config:
+    #   backend: vllm-server
+    #   server_url: http://10.214.40.11:8189/v1
 
 SubPipelines:
   DocPreprocessor:
