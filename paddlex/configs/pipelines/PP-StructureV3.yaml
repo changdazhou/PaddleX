@@ -4,7 +4,7 @@ pipeline_name: PP-StructureV3
 batch_size: 8
 
 use_doc_preprocessor: False
-use_seal_recognition: False
+use_seal_recognition: True
 use_table_recognition: True
 use_formula_recognition: True
 use_chart_recognition: False
@@ -14,7 +14,7 @@ SubModules:
   LayoutDetection:
     module_name: layout_detection
     model_name: PP-DocLayout_plus-L
-    model_dir: /paddle/project/GitHub/PaddleX/models/layout_det0818/inference
+    model_dir: /paddle/project/GitHub/PaddleX/models/layout_det0830/inference
     batch_size: 8
     threshold: 
       0: 0.5 # abstract
@@ -22,8 +22,8 @@ SubModules:
       2: 0.5 # aside_text
       3: 0.5 # chart
       4: 0.5 # content
-      5: 0.5 # formula
-      6: 0.5 # doc_title
+      5: 0.4 # formula
+      6: 0.4 # doc_title
       7: 0.5 # figure_title
       8: 0.5 # footer
       9: 0.5 # footer
@@ -32,15 +32,15 @@ SubModules:
       12: 0.5 # header
       13: 0.5 # header
       14: 0.5 # image
-      15: 0.5 # formula
+      15: 0.4 # formula
       16: 0.5 # number
-      17: 0.5 # paragraph_title
+      17: 0.4 # paragraph_title
       18: 0.5 # reference
       19: 0.5 # reference_content
       20: 0.45 # seal
       21: 0.5 # table
-      22: 0.5 # text
-      23: 0.5 # text
+      22: 0.4 # text
+      23: 0.4 # text
       24: 0.5 # vision_footnote
       # 0: 0.3  # paragraph_title
       # 1: 0.5  # image
