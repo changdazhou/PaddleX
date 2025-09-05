@@ -183,13 +183,19 @@ class _PPOCRVLPipeline(BasePipeline):
                 vl_rec_result = next(
                     self.vl_rec_model.predict(
                         input={
-                            "image": block_img,
+                            "image": block_img[..., ::-1],  # RGB -> BGR
                             "query": text_prompt,
                         },
                         skip_special_tokens=skip_special_tokens,
                         use_cache=True,
+                        max_new_tokens=4096,
                     )
                 )
+                # from paddle.device.cuda import memory_allocated, memory_reserved, max_memory_allocated, max_memory_reserved
+                # print("Memory allocated (GB):", memory_allocated() / (1024**3))
+                # print("Memory reserved (GB):", memory_reserved() / (1024**3))
+                # print("Max memory allocated (GB):", max_memory_allocated() / (1024**3))
+                # print("Max memory reserved (GB):", max_memory_reserved() / (1024**3))
                 vl_rec_result["image"] = block_img
                 vl_rec_res_list.append(vl_rec_result)
                 result_str = vl_rec_result.get("result", "")

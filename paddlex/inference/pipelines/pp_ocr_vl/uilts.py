@@ -41,7 +41,9 @@ def filter_overlap_boxes(
         Dict[str, List[Dict]]: Filtered layout detection results with overlapping boxes removed.
     """
     layout_det_res_filted = deepcopy(layout_det_res)
-    boxes = layout_det_res_filted["boxes"]
+    boxes = [
+        box for box in layout_det_res_filted["boxes"] if box["label"] != "reference"
+    ]
     dropped_indexes = set()
 
     # Iterate over each pair of boxes to find overlaps
@@ -61,19 +63,6 @@ def filter_overlap_boxes(
                 overlap_ratio > 0.9
             ):  # Assuming 1 is the threshold for significant overlap
                 # Here we are assuming higher score is preferable, you might want to adjust this logic
-                if (
-                    "reference" in boxes[i]["label"]
-                    and "reference_content" in boxes[j]["label"]
-                ) or (
-                    "reference" in boxes[j]["label"]
-                    and "reference_content" in boxes[i]["label"]
-                ):
-                    # Determine which one to drop; here we assume dropping "reference"
-                    if "reference" in boxes[i]["label"]:
-                        dropped_indexes.add(i)
-                    else:
-                        dropped_indexes.add(j)
-                    continue
                 box_area_i = calculate_bbox_area(boxes[i]["coordinate"])
                 box_area_j = calculate_bbox_area(boxes[j]["coordinate"])
                 if (
