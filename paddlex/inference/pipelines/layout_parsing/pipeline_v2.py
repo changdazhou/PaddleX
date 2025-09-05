@@ -486,6 +486,7 @@ class _LayoutParsingPipelineV2(BasePipeline):
 
         # when there is no layout detection result but there is ocr result, convert ocr detection result to layout detection result
         if len(layout_det_res["boxes"]) == 0 and len(overall_ocr_res["rec_boxes"]) > 0:
+            layout_det_res["boxes"] = []
             for idx, ocr_rec_box in enumerate(overall_ocr_res["rec_boxes"]):
                 base_region_bbox = update_region_box(ocr_rec_box, base_region_bbox)
                 layout_det_res["boxes"].append(
@@ -744,6 +745,7 @@ class _LayoutParsingPipelineV2(BasePipeline):
                 block.image = {"path": img_path, "img": img}
 
             layout_parsing_blocks.append(block)
+        return layout_parsing_blocks
 
         page_region_bbox = [65535, 65535, 0, 0]
         layout_parsing_regions: List[LayoutRegion] = []
@@ -815,7 +817,7 @@ class _LayoutParsingPipelineV2(BasePipeline):
         )
 
         # Format layout parsing block
-        layout_parsing_page = self.get_layout_parsing_objects(
+        layout_parsing_blocks = self.get_layout_parsing_objects(
             image=image,
             region_block_ocr_idx_map=region_block_ocr_idx_map,
             region_det_res=region_det_res,
@@ -828,15 +830,15 @@ class _LayoutParsingPipelineV2(BasePipeline):
             text_rec_score_thresh=self.general_ocr_pipeline.text_rec_score_thresh,
         )
 
-        parsing_res_list = self.sort_layout_parsing_blocks(layout_parsing_page)
+        # parsing_res_list = self.sort_layout_parsing_blocks(layout_parsing_page)
 
         index = 1
-        for block in parsing_res_list:
+        for block in layout_parsing_blocks:
             if block.label in BLOCK_LABEL_MAP["visualize_index_labels"]:
                 block.order_index = index
                 index += 1
 
-        return parsing_res_list
+        return layout_parsing_blocks
 
     def get_model_settings(
         self,
