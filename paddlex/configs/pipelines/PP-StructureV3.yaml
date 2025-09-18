@@ -14,7 +14,7 @@ SubModules:
   LayoutDetection:
     module_name: layout_detection
     model_name: PP-DocLayout_plus-L
-    model_dir: /paddle/project/GitHub/PaddleX/models/layout_det0830/inference
+    model_dir: /paddle/project/GitHub/PaddleX/models/layout_det0913/inference
     batch_size: 8
     threshold: 
       0: 0.5 # abstract
