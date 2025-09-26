@@ -15,11 +15,13 @@
 import html
 import itertools
 import re
+import math
 from collections import Counter
 from copy import deepcopy
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
+import cv2
 from PIL import Image
 from pydantic import BaseModel, computed_field, model_validator
 
@@ -329,41 +331,39 @@ def paint_token(image, box, token_str):
     Returns:
         np.ndarray: Modified image.
     """
-    import cv2
+    def get_optimal_font_scale(text, fontFace, square_size, fill_ratio=0.9):
+        # the scale is greater than 0.2 and less than 10,
+        # suitable for square_size is greater than 30 and less than 1000
+        left, right = 0.2, 10
+        optimal_scale = left
+        # search the optimal font scale
+        while right - left > 1e-2:
+            mid = (left + right) / 2
+            (w, h), _ = cv2.getTextSize(text, fontFace, mid, thickness=1)
+            if w < square_size * fill_ratio and h < square_size * fill_ratio:
+                optimal_scale = mid
+                left = mid
+            else:
+                right = mid
+        return optimal_scale, w, h
 
     x1, y1, x2, y2 = [int(v) for v in box]
-    img = image.copy()
-    # Fill with white color
-    cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 255, 255), thickness=-1)
-
-    # Compute width and height of the box
     box_w = x2 - x1
     box_h = y2 - y1
 
-    # Automatically choose font size so text fits in box
+    img = image.copy()
+    cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 255, 255), thickness=-1)
+
+    # automatically set scale and thickness according to length of the shortest side
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 1.0
-    font_thickness = 2
+    thickness_scale_ratio = 4
+    font_scale, text_w, text_h = get_optimal_font_scale(token_str, font, min(box_w, box_h), fill_ratio=0.9)
+    font_thickness = max(1, math.floor(font_scale * thickness_scale_ratio))
 
-    # Start with larger font, reduce until fits
-    while font_scale > 0:
-        (text_w, text_h), baseline = cv2.getTextSize(
-            token_str, font, font_scale, font_thickness
-        )
-        if text_w <= box_w * 0.9 and text_h + baseline <= box_h * 0.9:
-            break
-        font_scale -= 0.1
-    if font_scale <= 0:
-        font_scale = 0.2
-        (text_w, text_h), baseline = cv2.getTextSize(
-            token_str, font, font_scale, font_thickness
-        )
-
-    # Center the text in the box
+    # calculate center coordinates of the patinting text
     text_x = x1 + (box_w - text_w) // 2
     text_y = y1 + (box_h + text_h) // 2
 
-    # Draw text
     cv2.putText(
         img,
         token_str,
@@ -408,6 +408,10 @@ def tokenize_figure_of_table(table_block_img, table_box, figures):
             and figure_x_max <= table_x_max
             and figure_y_max <= table_y_max
         ):
+            drop_idxes.append(figure_id)
+            # the figure is too small to can't be tokenized and recognized when shortest length is less than 25
+            if min(figure_x_max - figure_x_min, figure_y_max - figure_y_min) < 25:
+                continue
             draw_box = [
                 figure_x_min - table_x_min,
                 figure_y_min - table_y_min,
@@ -417,7 +421,6 @@ def tokenize_figure_of_table(table_block_img, table_box, figures):
             token_str = "[F" + str(random_map[figure_id]) + "]"
             table_block_img = paint_token(table_block_img, draw_box, token_str)
             token_map[token_str] = f'<img src="{figure["path"]}" >'
-            drop_idxes.append(figure_id)
     drop_figures = [f["path"] for i, f in enumerate(figures) if i in drop_idxes]
     return table_block_img, token_map, drop_figures
 
