@@ -237,7 +237,7 @@ class _PPOCRVLPipeline(BasePipeline):
                         )
                     elif block_label == "chart" and use_chart_recognition:
                         text_prompt = "Chart Recognition:"
-                    elif "formula" in block_label:
+                    elif "formula" in block_label and block_label != "formula_number":
                         text_prompt = "Formula Recognition:"
                     block_imgs.append(block_img)
                     text_prompts.append(text_prompt)
