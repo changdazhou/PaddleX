@@ -275,10 +275,12 @@ class _PaddleOCRVLPipeline(BasePipeline):
         )
 
         parsing_res_lists = []
+        vl_rec_res_lists = []
         table_res_lists = []
         curr_vlm_block_idx = 0
         for i, blocks_for_img in enumerate(blocks):
             parsing_res_list = []
+            vl_rec_res_list = []
             table_res_list = []
             for j, block in enumerate(blocks_for_img):
                 block_img = block["img"]
@@ -293,6 +295,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     block_img4vl = block_imgs[curr_vlm_block_idx]
                     curr_vlm_block_idx += 1
                     vl_rec_result["image"] = block_img4vl
+                    vl_rec_res_list.append(vl_rec_result)
                     result_str = vl_rec_result.get("result", "")
                     if result_str is None:
                         result_str = ""
@@ -341,9 +344,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
                 parsing_res_list.append(block_info)
             parsing_res_lists.append(parsing_res_list)
+            vl_rec_res_lists.append(vl_rec_res_list)
             table_res_lists.append(table_res_list)
 
-        return parsing_res_lists, table_res_lists, imgs_in_doc
+        return parsing_res_lists, vl_rec_res_lists, table_res_lists, imgs_in_doc
 
     def predict(
         self,
@@ -503,7 +507,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 imgs_in_doc,
             ) = results_cv
 
-            parsing_res_lists, table_res_lists, imgs_in_doc = (
+            parsing_res_lists, vl_rec_res_lists, table_res_lists, imgs_in_doc = (
                 self.get_layout_parsing_results(
                     doc_preprocessor_images,
                     layout_det_results,
@@ -527,6 +531,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 doc_preprocessor_res,
                 layout_det_res,
                 table_res_list,
+                vl_rec_res_list,
                 parsing_res_list,
                 imgs_in_doc_for_img,
             ) in zip(
@@ -536,6 +541,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 doc_preprocessor_results,
                 layout_det_results,
                 table_res_lists,
+                vl_rec_res_lists,
                 parsing_res_lists,
                 imgs_in_doc,
             ):
@@ -545,6 +551,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     "doc_preprocessor_res": doc_preprocessor_res,
                     "layout_det_res": layout_det_res,
                     "table_res_list": table_res_list,
+                    "vl_rec_res_list": vl_rec_res_list,
                     "parsing_res_list": parsing_res_list,
                     "imgs_in_doc": imgs_in_doc_for_img,
                     "model_settings": model_settings,

@@ -171,11 +171,15 @@ def merge_blocks(blocks, non_merge_labels):
     Returns:
         List[Dict]: List of processed (and possibly merged) blocks.
     """
+    must_merge_label = ["header","footer","number"]
     blocks_to_merge = []
+    must_merge_block = []
     non_merge_blocks = {}
     for idx, block in enumerate(blocks):
         if block["label"] in non_merge_labels:
             non_merge_blocks[idx] = block
+        elif block["label"] in must_merge_label:
+            must_merge_block.append((idx, block))
         else:
             blocks_to_merge.append((idx, block))
 
@@ -236,17 +240,21 @@ def merge_blocks(blocks, non_merge_labels):
         )
         is_updown_align = (
             iou_h > 0
-            and block_label in ["text"]
+            and block_label in ["text","abstract","reference_content","figure_title","algorithm","aside_text","doc_title","footer","footnote","header","number","vision_footnote"]
             and block_label == prev_label
             and block_bbox[3] >= prev_bbox[1]
-            and abs(block_bbox[1] - prev_bbox[3])
-            < max(prev_bbox[3] - prev_bbox[1], block_bbox[3] - block_bbox[1]) * 0.5
-            and (
-                is_aligned(block_bbox[0], prev_bbox[0])
-                ^ is_aligned(block_bbox[2], prev_bbox[2])
-            )
-            and overlapwith_other_box(idx, prev_idx, blocks)
+            # and abs(block_bbox[1] - prev_bbox[3])
+            # < max(prev_bbox[3] - prev_bbox[1], block_bbox[3] - block_bbox[1]) * 0.5
+            # and (
+            #     is_aligned(block_bbox[0], prev_bbox[0])
+            #     ^ is_aligned(block_bbox[2], prev_bbox[2])
+            # )
+            # and overlapwith_other_box(idx, prev_idx, blocks)
         )
+        if is_updown_align:
+            w,h = calc_merged_wh([blk["img"] for blk in  current_group] + [block["img"]])
+            is_updown_align = w* h < 384 * 384
+        # import pdb; pdb.set_trace()
         if is_cross:
             align_mode = "center"
         elif is_updown_align:
@@ -273,6 +281,17 @@ def merge_blocks(blocks, non_merge_labels):
 
     result_blocks = []
     used_indices = set()
+    must_merge_blocks = []
+    imgs = []
+    for (idx,block) in must_merge_block:
+        imgs.append(block["img"])
+    merged_img = merge_images(imgs, "center")
+    for j, (block_idx,block) in enumerate(must_merge_block):
+        block = blocks[block_idx].copy()
+        block["img"] = merged_img if j == 0 else None
+        block["merge_aligns"] = "center" if j == 0 else None
+        result_blocks.append(block)
+        used_indices.add(block_idx)
     idx = 0
     while idx < len(blocks):
         group_found = False
