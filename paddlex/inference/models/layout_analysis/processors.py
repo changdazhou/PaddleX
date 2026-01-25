@@ -571,6 +571,11 @@ class LayoutAnalysisProcess:
         polygon_points = None
         if layout_shape_mode == "rect":
             masks = None
+        if boxes.shape[-1] == 306:
+            rows = boxes.shape[0]
+            row_indices = np.arange(rows).reshape(-1, 1)
+            boxes = np.hstack((boxes, row_indices))
+
         boxes[:, 2:6] = np.round(boxes[:, 2:6]).astype(int)
         if isinstance(threshold, float):
             expect_boxes = (boxes[:, 1] > threshold) & (boxes[:, 0] > -1)
@@ -618,7 +623,7 @@ class LayoutAnalysisProcess:
 
         filter_large_image = True
         # boxes.shape[1] == 6 is object detection, 7 is new ordered object detection, 8 is ordered object detection
-        if filter_large_image and len(boxes) > 1 and boxes.shape[1] in [6, 7, 8]:
+        if filter_large_image and len(boxes) > 1 and boxes.shape[1] in [6, 7, 8, 307]:
             if img_size[0] > img_size[1]:
                 area_thres = 0.82
             else:
@@ -733,6 +738,12 @@ class LayoutAnalysisProcess:
 
         if boxes.size == 0:
             return np.array([])
+
+        if boxes.shape[1] == 307:
+            counts = np.bincount(boxes[:, -1].astype(int), minlength=300)
+            sum_vals = boxes[:, 6:-1] @ counts
+            order_votes = (boxes.shape[0] - sum_vals)[:, np.newaxis]
+            boxes = np.hstack([boxes[:, :6], order_votes])
 
         if boxes.shape[1] == 8:
             # Sort boxes by their order
