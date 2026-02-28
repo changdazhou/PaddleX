@@ -92,6 +92,14 @@ def draw_box(img: Image.Image, boxes: List[dict]) -> Image.Image:
             draw.rectangle([(xmin, ymin - th), (xmin + tw + 4, ymin + 1)], fill=color)
             draw.text((xmin + 2, ymin - th - 2), text, fill=font_color, font=font)
 
+        text_position = (bbox[2] + 2, bbox[1] - font_size // 2)
+        if int(img.width) - bbox[2] < font_size:
+            text_position = (
+                int(bbox[2] - font_size * 1.1),
+                bbox[1] - font_size // 2,
+            )
+        draw.text(text_position, str(i + 1), font=font, fill="red")
+
     return img
 
 
