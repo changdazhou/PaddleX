@@ -1,0 +1,28 @@
+# requirements.txt
+# DocLayout-YOLO 服务依赖（Linux服务器/无图形界面环境）
+
+# ========== 核心依赖 ==========
+# 深度学习框架
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-contrib-python==4.10.0.84
+
+# 文档布局检测模型（使用最新可用版本）
+doclayout-yolo>=0.0.4
+
+# ========== 图像处理 ==========
+# 使用headless版本避免Qt依赖问题
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# ========== Web服务 ==========
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# ========== 工具库 ==========
+python-multipart>=0.0.6  # FastAPI文件上传支持
+
+# ========== 工具库 ==========
+python-multipart>=0.0.6  # FastAPI文件上传支持
