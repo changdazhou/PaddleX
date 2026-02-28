@@ -90,9 +90,41 @@ class DetClinetPredictor(BasePredictor):
             f"{self.server_url}/categories",
         )
         categories_dict = response.json()["categories"]
+        custom_map = {
+            # 第一组 <-> 第二组
+            "title": "paragraph_title",
+            "equation": "display_formula",
+            "code": "algorithm",
+            "list_item": "text",
+            "table_caption": "figure_title",
+            "image_caption": "figure_title",
+            "code_caption": "paragraph_title",
+            "table_footnote": "vision_footnote",
+            "image_footnote": "vision_footnote",
+            "page_number": "number",
+            "page_footnote": "footnote",
+            "image_block": "image",
+            "equation_block": "display_formula",
+            "ref_text": "reference_content",
+            "phonetic": "aside_text",
+            "list": "text",
+            "unknown": "aside_text",
+            # 第三组 <-> 第四组
+            "title": "paragraph_title",
+            "plain_text": "text",
+            "abandon": "aside_text",
+            "figure": "image",
+            "figure_caption": "figure_title",
+            "table_caption": "figure_title",
+            "isolate_formula": "display_formula",
+            "formula_caption": "formula_number",
+        }
         
         # Convert dict like {'0': 'title', '1': 'plain_text', ...} to list ['title', 'plain_text', ...]
-        self.labels = [categories_dict[str(i)] for i in range(len(categories_dict))]
+        self.labels = [
+            custom_map.get(categories_dict[str(i)], categories_dict[str(i)])
+            for i in range(len(categories_dict))
+        ]
         self.labels_to_id = {v: k for k, v in enumerate(self.labels)}
 
         self.post_op = DetPostProcess(labels=self.labels)
@@ -198,6 +230,7 @@ class DetClinetPredictor(BasePredictor):
         layout_nms: bool = False,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
+        **kwargs: Any,
     ):
         """
         Process a batch of data through the preprocessing, inference, and postprocessing.
@@ -219,8 +252,7 @@ class DetClinetPredictor(BasePredictor):
         datas = image_reader(datas)
         batch_preds = {}
         for data in datas:
-            with open(data["img_path"], "rb") as f:
-                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+            image_base64 = array_to_base64(data["img"])
 
             response = requests.post(
                 f"{self.server_url}/predict",
@@ -254,3 +286,18 @@ class DetClinetPredictor(BasePredictor):
             "input_img": [data["ori_img"] for data in datas],
             "boxes": boxes,
         }
+
+
+def array_to_base64(img_array, fmt="PNG"):
+    import numpy as np
+    import base64
+    import io
+    from PIL import Image
+
+    if img_array.dtype != np.uint8:
+        img_array = img_array.astype(np.uint8)
+    img = Image.fromarray(img_array)
+    buffer = io.BytesIO()
+    img.save(buffer, format=fmt)
+    buffer.seek(0)
+    return base64.b64encode(buffer.read()).decode("utf-8")

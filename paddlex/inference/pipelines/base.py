@@ -92,6 +92,7 @@ class BasePipeline(ABC, metaclass=AutoRegisterABCMetaClass):
             hpi_config = hpi_config or {}
             hpi_config = {**self.hpi_config, **hpi_config}
         genai_config = config.get("genai_config", None)
+        server_url = config.get("server_url", None)
 
         from .. import create_predictor
 
@@ -112,6 +113,7 @@ class BasePipeline(ABC, metaclass=AutoRegisterABCMetaClass):
             use_hpip=use_hpip,
             hpi_config=hpi_config,
             genai_config=genai_config,
+            server_url=server_url,
             **kwargs,
         )
         return model

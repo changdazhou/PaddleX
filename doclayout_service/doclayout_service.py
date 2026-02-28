@@ -90,6 +90,33 @@ class MinerU25Service(LayoutDetectionService):
         23: "equation_block",  # 公式块(多行公式)
         24: "unknown",  # 未知块
     }
+    CATEGORIES = {
+        0: "text",  # 文本
+        1: "paragraph_title",  # 段落标题
+        2: "table",  # 表格
+        3: "display_formula",  # 公式(独立公式)
+        4: "algorithm",  # 代码
+        5: "algorithm",  # 算法/伪代码
+        6: "aside_text",  # 侧栏文本(装订线等)
+        7: "reference_content",  # 参考文献(一条)
+        8: "aside_text",  # 注音符号
+        9: "text",  # 列表项(无序/有序列表)
+        10: "figure_title",  # 表格标题
+        11: "figure_title",  # 图像标题
+        12: "paragraph_title",  # 代码标题
+        13: "vision_footnote",  # 表格脚注
+        14: "vision_footnote",  # 图像脚注
+        15: "header",  # 页眉
+        16: "footer",  # 页脚
+        17: "number",  # 页码
+        18: "footnote",  # 脚注
+        19: "image",  # 图像
+        20: "chart",
+        21: "text",  # 列表块(无序/有序列表)
+        22: "image",  # 图像块(多图)
+        23: "display_formula",  # 公式块(多行公式)
+        24: "aside_text",  # 未知块
+    }
 
     def __init__(
         self,
@@ -158,6 +185,18 @@ class DocLayoutYOLOService(LayoutDetectionService):
         6: "table_caption",  # 表格标题
         7: "isolate_formula",  # 独立公式
         8: "formula_caption",  # 公式标题
+        9: "inline_formula",  # 行内公式
+    }
+    CATEGORIES = {
+        0: "paragraph_title",  # 标题
+        1: "text",  # 正文
+        2: "aside_text",  # 废弃/页眉页脚
+        3: "image",  # 图片
+        4: "figure_title",  # 图片标题
+        5: "table",  # 表格
+        6: "figure_title",  # 表格标题
+        7: "display_formula",  # 独立公式
+        8: "formula_number",  # 公式标题
         9: "inline_formula",  # 行内公式
     }
 
@@ -500,6 +539,13 @@ if __name__ == "__main__":
         default="http://127.0.0.1:30000",
         help="MinerU服务器地址（仅在--service mineru25时有效，默认: http://127.0.0.1:30000）",
     )
+    parser.add_argument(
+        "--docmodel-path",
+        type=str,
+        default=os.environ.get("DOCMODEL_PATH"),
+        help="DocLayout模型路径（仅在--service doclayout时有效，默认: 环境变量DOCMODEL_PATH）",
+    )
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
 
     os.environ["SERVICE_TYPE"] = args.service
@@ -512,5 +558,5 @@ if __name__ == "__main__":
         "doclayout_service:app",
         host=args.host,
         port=args.port,
-        workers=1,  # 模型较大，建议单进程
+        workers=args.workers,  # 模型较大，建议单进程
     )
