@@ -90,8 +90,10 @@ class DetClinetPredictor(BasePredictor):
             f"{self.server_url}/categories",
         )
         categories_dict = response.json()["categories"]
+        
         # Convert dict like {'0': 'title', '1': 'plain_text', ...} to list ['title', 'plain_text', ...]
         self.labels = [categories_dict[str(i)] for i in range(len(categories_dict))]
+        self.labels_to_id = {v: k for k, v in enumerate(self.labels)}
 
         self.post_op = DetPostProcess(labels=self.labels)
 
@@ -131,7 +133,11 @@ class DetClinetPredictor(BasePredictor):
             boxes_list = []
             for item in data_list:
                 cls_id = item.get("class_id", 0)
+                if cls_id == -1:
+                    cls_id = self.labels_to_id.get(item.get("category", "0"), 0)
                 score = item.get("score", 0.0)
+                if score == -1:
+                    score = 1.0
                 bbox = item.get("bbox", {})
                 xmin = bbox.get("x1", 0)
                 ymin = bbox.get("y1", 0)
