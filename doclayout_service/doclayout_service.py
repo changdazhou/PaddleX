@@ -1,20 +1,29 @@
-# doclayout_service.py
-"""
-DocLayout-YOLO 独立部署服务
-从MinerU中提取并简化，支持base64图片输入，返回检测框信息
-"""
+# Copyright (c) 2025 PaddlePaddle Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import os
 import io
+import cv2
 import base64
 import logging
+import argparse
+from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
-import torch
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -34,7 +43,105 @@ class DetectionBox:
     area: float  # 框面积
 
 
-class DocLayoutYOLOService:
+class LayoutDetectionService(ABC):
+    """布局检测服务抽象基类"""
+
+    CATEGORIES: Dict[int, str] = {}
+
+    @abstractmethod
+    def predict_base64(self, base64_str: str) -> List[Dict[str, Any]]:
+        """
+        基于base64编码的图片进行预测
+
+        Args:
+            base64_str: base64编码的图片
+
+        Returns:
+            检测结果列表
+        """
+        pass
+
+
+class MinerU25Service(LayoutDetectionService):
+    CATEGORIES = {
+        0: "text",  # 文本
+        1: "title",  # 段落标题
+        2: "table",  # 表格
+        3: "equation",  # 公式(独立公式)
+        4: "code",  # 代码
+        5: "algorithm",  # 算法/伪代码
+        6: "aside_text",  # 侧栏文本(装订线等)
+        7: "ref_text",  # 参考文献(一条)
+        8: "phonetic",  # 注音符号
+        9: "list_item",  # 列表项(无序/有序列表)
+        10: "table_caption",  # 表格标题
+        11: "image_caption",  # 图像标题
+        12: "code_caption",  # 代码标题
+        13: "table_footnote",  # 表格脚注
+        14: "image_footnote",  # 图像脚注
+        15: "header",  # 页眉
+        16: "footer",  # 页脚
+        17: "page_number",  # 页码
+        18: "page_footnote",  # 脚注
+        19: "image",  # 图像
+        20: "chart",
+        21: "list",  # 列表块(无序/有序列表)
+        22: "image_block",  # 图像块(多图)
+        23: "equation_block",  # 公式块(多行公式)
+        24: "unknown",  # 未知块
+    }
+
+    def __init__(
+        self,
+        server_url: Optional[str] = "http://127.0.0.1:30000",
+    ):
+        from mineru.backend.vlm.vlm_analyze import ModelSingleton
+
+        self.model = ModelSingleton().get_model("http-client", None, server_url)
+
+    def predict_base64(self, base64_str: str) -> List[Dict[str, Any]]:
+        if "," in base64_str:
+            base64_str = base64_str.split(",")[1]  # 去除data:image前缀
+
+        image_bytes = base64.b64decode(base64_str)
+        image = Image.open(io.BytesIO(image_bytes))
+
+        return self.predict(image)
+
+    def predict(self, image: Image) -> List[Dict[str, Any]]:
+        # preprocess
+        image = ImageOps.exif_transpose(image) or image
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        # inference
+        results = self.model.layout_detect(image=image)
+
+        # postprocess
+        width, height = image.size
+
+        new_results = []
+        for block in results:
+            x1, y1, x2, y2 = block.bbox
+            new_results.append(
+                {
+                    "category": block.type,
+                    "class_id": -1,
+                    "bbox": {
+                        "x1": round(x1 * width),
+                        "y1": round(y1 * height),
+                        "x2": round(x2 * width),
+                        "y2": round(y2 * height),
+                    },
+                    "score": -1,
+                    "area": -1,
+                    "angle": block.angle,
+                }
+            )
+        return new_results
+
+
+class DocLayoutYOLOService(LayoutDetectionService):
     """
     DocLayout-YOLO 服务封装类
     从MinerU的 DocLayoutYOLOModel 简化提取
@@ -57,7 +164,7 @@ class DocLayoutYOLOService:
     def __init__(
         self,
         model_path: Optional[str] = None,
-        device: str = "cuda:0" if torch.cuda.is_available() else "cpu",
+        device: str = "cuda:0",
         imgsz: int = 1024,
         conf_threshold: float = 0.2,
         iou_threshold: float = 0.45,
@@ -262,13 +369,13 @@ class DocLayoutYOLOService:
 # ==================== FastAPI 服务封装 ====================
 
 app = FastAPI(
-    title="DocLayout-YOLO Service",
-    description="文档布局分析服务，从MinerU提取的DocLayout-YOLO实现",
+    title="DocLayout Service",
+    description="文档布局分析服务，支持多种模型后端",
     version="1.0.0",
 )
 
-# 全局模型实例
-model_service: Optional[DocLayoutYOLOService] = None
+# 全局模型实例和配置
+model_service: Optional[LayoutDetectionService] = None
 
 
 class PredictRequest(BaseModel):
@@ -288,20 +395,30 @@ async def startup_event():
     """服务启动时加载模型"""
     global model_service
     try:
-        # 从环境变量读取配置
-        model_path = os.environ.get("DOCMODEL_PATH")
-        device = os.environ.get("DOCMODEL_DEVICE", "auto")
+        SERVICE_TYPE = os.environ.get("SERVICE_TYPE", "doclayout")
 
-        if device == "auto":
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        if SERVICE_TYPE == "mineru25":
+            server_url = os.environ.get("MINERU_SERVER_URL", "http://127.0.0.1:30000")
+            model_service = MinerU25Service(server_url)
 
-        model_service = DocLayoutYOLOService(
-            model_path=model_path,
-            device=device,
-            conf_threshold=float(os.environ.get("DOCMODEL_CONF", "0.2")),
-            imgsz=int(os.environ.get("DOCMODEL_IMGSZ", "1024")),
-        )
-        logger.info("✅ DocLayout-YOLO服务启动成功")
+        elif SERVICE_TYPE == "doclayout":
+            import torch
+
+            model_path = os.environ.get("DOCMODEL_PATH")
+            device = os.environ.get("DOCMODEL_DEVICE", "auto")
+
+            if device == "auto":
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+            model_service = DocLayoutYOLOService(
+                model_path=model_path,
+                device=device,
+                conf_threshold=float(os.environ.get("DOCMODEL_CONF", "0.2")),
+                imgsz=int(os.environ.get("DOCMODEL_IMGSZ", "1024")),
+            )
+
+        logger.info(f"✅ {SERVICE_TYPE}服务启动成功")
+
     except Exception as e:
         logger.error(f"❌ 模型加载失败: {e}")
         raise
@@ -355,24 +472,45 @@ async def health_check():
     return {
         "status": "healthy",
         "model_loaded": model_service is not None,
-        "device": model_service.device if model_service else "unknown",
-    }
-
-
-@app.get("/categories")
-async def get_categories():
-    """获取支持的类别列表"""
-    return {
-        "categories": DocLayoutYOLOService.CATEGORIES,
-        "count": len(DocLayoutYOLOService.CATEGORIES),
     }
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--service",
+        type=str,
+        default="doclayout",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="服务绑定地址（默认: 0.0.0.0）",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", 8787)),
+        help="服务绑定端口（默认: 8787）",
+    )
+    parser.add_argument(
+        "--mineru-url",
+        type=str,
+        default="http://127.0.0.1:30000",
+        help="MinerU服务器地址（仅在--service mineru25时有效，默认: http://127.0.0.1:30000）",
+    )
+    args = parser.parse_args()
+
+    os.environ["SERVICE_TYPE"] = args.service
+    os.environ["MINERU_SERVER_URL"] = args.mineru_url
+
+    logger.info(f"✓ 服务地址: http://{args.host}:{args.port}")
+
     # 启动服务
     uvicorn.run(
         "doclayout_service:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8787)),
+        host=args.host,
+        port=args.port,
         workers=1,  # 模型较大，建议单进程
     )
