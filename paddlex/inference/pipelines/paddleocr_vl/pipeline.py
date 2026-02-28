@@ -29,6 +29,7 @@ from ...common.reader import ReadImage
 from ...utils.benchmark import benchmark
 from ...utils.hpi import HPIConfig
 from ...utils.pp_option import PaddlePredictorOption
+from ...utils.xycut import xycut_sort
 from .._parallel import AutoParallelImageSimpleInferencePipeline
 from ..base import BasePipeline
 from ..components import CropByBoxes
@@ -102,10 +103,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     {"model_config_error": "config error for layout_det_model!"},
                 )
                 model_name = layout_det_config.get("model_name", None)
-                assert model_name is not None and model_name in [
-                    "PP-DocLayoutV2",
-                    "PP-DocLayoutV3",
-                ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
+                # assert model_name is not None and model_name in [
+                #     "PP-DocLayoutV2",
+                #     "PP-DocLayoutV3",
+                # ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
                 layout_kwargs = {}
                 if (threshold := layout_det_config.get("threshold", None)) is not None:
                     layout_kwargs["threshold"] = threshold
@@ -177,6 +178,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         format_block_content: Union[bool, None],
         merge_layout_blocks: Union[bool, None],
         markdown_ignore_labels: Optional[list[str]] = None,
+        use_xycut: Union[bool, None] = None,
     ) -> dict:
         """
         Get the model settings based on the provided parameters or default values.
@@ -218,6 +220,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
         if markdown_ignore_labels is None:
             markdown_ignore_labels = self.markdown_ignore_labels
 
+        if use_xycut is None:
+            use_xycut = False
+
         return dict(
             use_doc_preprocessor=use_doc_preprocessor,
             use_layout_detection=use_layout_detection,
@@ -227,6 +232,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             format_block_content=format_block_content,
             merge_layout_blocks=merge_layout_blocks,
             markdown_ignore_labels=markdown_ignore_labels,
+            use_xycut=use_xycut,
         )
 
     def check_model_settings_valid(self, input_params: dict) -> bool:
@@ -259,6 +265,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         vlm_kwargs=None,
         merge_layout_blocks=True,
         layout_shape_mode="auto",
+        use_xycut=False,
     ):
         blocks = []
         has_spotting = False
@@ -281,6 +288,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         for i, (image, layout_det_res, imgs_in_doc_for_img) in enumerate(
             zip(images, layout_det_results, imgs_in_doc)
         ):
+            if use_xycut:
+                layout_det_res["boxes"] = xycut_sort(layout_det_res["boxes"])
             layout_det_res = filter_overlap_boxes(layout_det_res, layout_shape_mode)
             boxes = layout_det_res["boxes"]
             blocks_for_img = self.crop_by_boxes(image, boxes, layout_shape_mode)
@@ -534,6 +543,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         merge_layout_blocks: Optional[bool] = None,
         markdown_ignore_labels: Optional[list[str]] = None,
         vlm_extra_args: Optional[dict] = None,
+        use_xycut: Optional[bool] = False,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -582,6 +592,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             format_block_content,
             merge_layout_blocks,
             markdown_ignore_labels,
+            use_xycut,
         )
 
         model_settings["return_layout_polygon_points"] = (
@@ -719,6 +730,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 },
                 merge_layout_blocks=model_settings["merge_layout_blocks"],
                 layout_shape_mode=layout_shape_mode,
+                use_xycut=model_settings["use_xycut"],
             )
 
             for (
