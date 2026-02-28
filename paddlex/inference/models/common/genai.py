@@ -55,7 +55,9 @@ class GenAIConfig(BaseModel):
         return self
 
 
-def need_local_model(genai_config):
+def need_local_model(genai_config, server_url):
+    if server_url:
+        return False
     if genai_config is not None and genai_config.backend in SERVER_BACKENDS:
         return False
     return True

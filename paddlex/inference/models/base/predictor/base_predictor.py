@@ -91,6 +91,7 @@ class BasePredictor(
         use_hpip: bool = False,
         hpi_config: Optional[Union[Dict[str, Any], HPIConfig]] = None,
         genai_config: Optional[GenAIConfig] = None,
+        server_url: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> None:
         """Initializes the BasePredictor.
@@ -118,7 +119,7 @@ class BasePredictor(
         """
         super().__init__()
 
-        if need_local_model(genai_config):
+        if need_local_model(genai_config, server_url):
             if model_dir is None:
                 raise ValueError(
                     "`model_dir` should not be `None`, as a local model is needed."
@@ -126,6 +127,13 @@ class BasePredictor(
             self.model_dir = Path(model_dir)
             self.config = config if config else self.load_config(self.model_dir)
             self._use_local_model = True
+        elif server_url:
+            if model_dir is not None:
+                warnings.warn("`model_dir` will be ignored, as it is not needed.")
+            self.model_dir = None
+            self.config = config
+            self.server_url = server_url
+            self._use_local_model = False
         else:
             if model_dir is not None:
                 warnings.warn("`model_dir` will be ignored, as it is not needed.")

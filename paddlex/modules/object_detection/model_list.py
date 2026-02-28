@@ -86,3 +86,5 @@ MODELS = [
 ]
 
 LAYOUTANALYSIS_MODELS = ["PP-DocLayoutV2", "PP-DocLayoutV3"]
+
+LAYOUTCLIENT_MODELS = ["DocLayout-YOLO"]

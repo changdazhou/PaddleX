@@ -33,6 +33,7 @@ from .image_unwarping import WarpPredictor
 from .instance_segmentation import InstanceSegPredictor
 from .keypoint_detection import KptPredictor
 from .layout_analysis import LayoutAnalysisPredictor
+from .layout_client import DetClinetPredictor
 from .m_3d_bev_detection import BEVDet3DPredictor
 from .multilingual_speech_recognition import WhisperPredictor
 from .object_detection import DetPredictor
@@ -60,6 +61,7 @@ def create_predictor(
     use_hpip: bool = False,
     hpi_config: Optional[Union[Dict[str, Any], HPIConfig]] = None,
     genai_config: Optional[Union[Dict[str, Any], GenAIConfig]] = None,
+    server_url: Optional[str] = None,
     *args,
     **kwargs,
 ) -> BasePredictor:
@@ -67,7 +69,7 @@ def create_predictor(
     if genai_config is not None:
         genai_config = GenAIConfig.model_validate(genai_config)
 
-    if need_local_model(genai_config):
+    if need_local_model(genai_config, server_url):
         if model_dir is None:
             model_dir = official_models[model_name]
         else:
@@ -88,6 +90,7 @@ def create_predictor(
         use_hpip=use_hpip,
         hpi_config=hpi_config,
         genai_config=genai_config,
+        server_url=server_url,
         model_name=model_name,
         *args,
         **kwargs,
