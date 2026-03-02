@@ -312,7 +312,7 @@ def export_to_html(table_data: TableData) -> str:
     return f"<table>{body_content}</table>"
 
 
-def convert_otsl_to_html(otsl_content: str) -> str:
+def block_content_to_html(otsl_content: str) -> str:
     if otsl_content.startswith("<table") and otsl_content.endswith("</table>"):
         return otsl_content
 
