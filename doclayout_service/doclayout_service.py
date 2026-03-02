@@ -514,6 +514,15 @@ async def health_check():
     }
 
 
+@app.get("/categories")
+async def get_categories():
+    """获取支持的类别列表"""
+    return {
+        "categories": DocLayoutYOLOService.CATEGORIES,
+        "count": len(DocLayoutYOLOService.CATEGORIES),
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(

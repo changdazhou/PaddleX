@@ -119,7 +119,7 @@ class DetClinetPredictor(BasePredictor):
             "isolate_formula": "display_formula",
             "formula_caption": "formula_number",
         }
-        
+
         # Convert dict like {'0': 'title', '1': 'plain_text', ...} to list ['title', 'plain_text', ...]
         self.labels = [
             custom_map.get(categories_dict[str(i)], categories_dict[str(i)])
@@ -269,6 +269,9 @@ class DetClinetPredictor(BasePredictor):
 
         # process a batch of predictions into a list of single image result
         preds_list = self._format_output(batch_preds)
+        do_xy_cut = True
+        if self.model_name in ["MinerU2.5-Layout", "DolphinV2-Layout"]:
+            do_xy_cut = False
         # postprocess
         boxes = self.post_op(
             preds_list,
@@ -278,6 +281,7 @@ class DetClinetPredictor(BasePredictor):
             layout_unclip_ratio=layout_unclip_ratio or self.layout_unclip_ratio,
             layout_merge_bboxes_mode=layout_merge_bboxes_mode
             or self.layout_merge_bboxes_mode,
+            do_xy_cut=do_xy_cut,
         )
 
         return {
@@ -289,9 +293,10 @@ class DetClinetPredictor(BasePredictor):
 
 
 def array_to_base64(img_array, fmt="PNG"):
-    import numpy as np
     import base64
     import io
+
+    import numpy as np
     from PIL import Image
 
     if img_array.dtype != np.uint8:

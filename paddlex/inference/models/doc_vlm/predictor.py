@@ -40,7 +40,7 @@ class DocVLMPredictor(BasePredictor):
         "PP-DocBee": {"PP-DocBee-2B", "PP-DocBee-7B"},
         "PP-DocBee2": {"PP-DocBee2-3B"},
         "PP-Chart2Table": {"PP-Chart2Table"},
-        "PaddleOCR-VL": {"PaddleOCR-VL-0.9B", "PaddleOCR-VL-1.5-0.9B"},
+        "PaddleOCR-VL": {"PaddleOCR-VL-0.9B", "PaddleOCR-VL-1.5-0.9B", "MinerU2.5"},
     }
 
     def __init__(self, *args, **kwargs):

@@ -998,6 +998,7 @@ class DetPostProcess:
         layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float]]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
+        do_xy_cut: Optional[bool] = True,
     ) -> List[Boxes]:
         """Apply the post-processing to a batch of outputs.
 
@@ -1019,6 +1020,7 @@ class DetPostProcess:
                 layout_merge_bboxes_mode,
             )
             boxes = filter_boxes(boxes)
-            boxes = xycut_sort(boxes)
+            if do_xy_cut:
+                boxes = xycut_sort(boxes)
             outputs.append(boxes)
         return outputs
