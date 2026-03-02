@@ -62,6 +62,291 @@ class LayoutDetectionService(ABC):
         pass
 
 
+class DolphinV2Service(LayoutDetectionService):
+    CATEGORIES = {
+        0: "sec_0",
+        1: "sec_1",
+        2: "sec_2",
+        3: "sec_3",
+        4: "sec_4",
+        5: "sec_5",
+        6: "para",
+        7: "half_para",
+        8: "equ",
+        9: "tab",
+        10: "code",
+        11: "fig",
+        12: "cap",
+        13: "list",
+        14: "catalogue",
+        15: "reference",
+        16: "header",
+        17: "foot",
+        18: "fnote",
+        19: "watermark",
+        20: "anno",
+    }
+
+    def __init__(
+        self,
+        model_path: Optional[str] = "",
+    ):
+        import torch
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+        # Load model from local path or Hugging Face hub
+        self.processor = AutoProcessor.from_pretrained(model_path)
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_path)
+        self.model.eval()
+
+        # Set device and precision
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+
+        if self.device == "cuda":
+            self.model = self.model.bfloat16()
+        else:
+            self.model = self.model.float()
+
+        # set tokenizer
+        self.tokenizer = self.processor.tokenizer
+        self.tokenizer.padding_side = "left"
+
+    def chat(self, prompt, image):
+        from qwen_vl_utils import process_vision_info
+
+        # Check if we're dealing with a batch
+        is_batch = isinstance(image, list)
+
+        if not is_batch:
+            # Single image, wrap it in a list for consistent processing
+            images = [image]
+            prompts = [prompt]
+        else:
+            # Batch of images
+            images = image
+            prompts = prompt if isinstance(prompt, list) else [prompt] * len(images)
+
+        assert len(images) == len(prompts)
+
+        # preprocess all images
+        processed_images = [self.resize_img(img) for img in images]
+        # generate all messages
+        all_messages = []
+        for img, question in zip(processed_images, prompts):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "image": img,
+                        },
+                        {"type": "text", "text": question},
+                    ],
+                }
+            ]
+            all_messages.append(messages)
+
+        # prepare all texts
+        texts = [
+            self.processor.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True
+            )
+            for msgs in all_messages
+        ]
+
+        # collect all image inputs
+        all_image_inputs = []
+        all_video_inputs = None
+        for msgs in all_messages:
+            image_inputs, video_inputs = process_vision_info(msgs)
+            all_image_inputs.extend(image_inputs)
+
+        # prepare model inputs
+        inputs = self.processor(
+            text=texts,
+            images=all_image_inputs if all_image_inputs else None,
+            videos=all_video_inputs if all_video_inputs else None,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = inputs.to(self.model.device)
+
+        # inference
+        generated_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=4096,
+            do_sample=False,
+            temperature=None,
+            # repetition_penalty=1.05
+        )
+        generated_ids_trimmed = [
+            out_ids[len(in_ids) :]
+            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+
+        results = self.processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+
+        # Return a single result for single image input
+        if not is_batch:
+            return results[0]
+        return results
+
+    def parse_layout_string(self, bbox_str):
+        """
+        Dolphin-V1.5 layout string parsing function
+        Parse layout string to extract bbox and category information
+        Supports multiple formats:
+        1. Original format: [x1,y1,x2,y2] label
+        2. New format: [x1,y1,x2,y2][label][PAIR_SEP] or [x1,y1,x2,y2][label][meta_info][PAIR_SEP]
+        """
+        import re
+
+        parsed_results = []
+
+        segments = bbox_str.split("[PAIR_SEP]")
+        new_segments = []
+        for seg in segments:
+            new_segments.extend(seg.split("[RELATION_SEP]"))
+        segments = new_segments
+        for segment in segments:
+            segment = segment.strip()
+            if not segment:
+                continue
+
+            coord_pattern = r"\[(\d*\.?\d+),(\d*\.?\d+),(\d*\.?\d+),(\d*\.?\d+)\]"
+            coord_match = re.search(coord_pattern, segment)
+            label_matches = self.extract_labels_from_string(segment)
+
+            if coord_match and label_matches:
+                coords = [float(coord_match.group(i)) for i in range(1, 5)]
+                label = label_matches[0].strip()
+                parsed_results.append(
+                    (coords, label, label_matches[1:])
+                )  # label_matches[1:] 是 tags
+
+        return parsed_results
+
+    def extract_labels_from_string(self, text):
+        """
+        from [202,217,921,325][para][author] extract para and author
+        """
+        import re
+
+        all_matches = re.findall(r"\[([^\]]+)\]", text)
+
+        labels = []
+        for match in all_matches:
+            if not re.match(r"^\d+,\d+,\d+,\d+$", match):
+                labels.append(match)
+
+        return labels
+
+    def resize_img(self, image, max_size=1600, min_size=28):
+        width, height = image.size
+        if max(width, height) < max_size and min(width, height) >= 28:
+            return image
+
+        if max(width, height) > max_size:
+            if width > height:
+                new_width = max_size
+                new_height = int(height * (max_size / width))
+            else:
+                new_height = max_size
+                new_width = int(width * (max_size / height))
+            image = image.resize((new_width, new_height))
+            width, height = image.size
+
+        if min(width, height) < 28:
+            if width < height:
+                new_width = min_size
+                new_height = int(height * (min_size / width))
+            else:
+                new_height = min_size
+                new_width = int(width * (min_size / height))
+            image = image.resize((new_width, new_height))
+
+        return image
+
+    def process_coordinates(self, coords, pil_image):
+        from qwen_vl_utils import smart_resize
+
+        original_w, original_h = pil_image.size[:2]
+        # use the same resize logic as the model
+        resized_pil = self.resize_img(pil_image)
+        resized_image = np.array(resized_pil)
+        resized_h, resized_w = resized_image.shape[:2]
+        resized_h, resized_w = smart_resize(
+            resized_h, resized_w, factor=28, min_pixels=784, max_pixels=2560000
+        )
+
+        w_ratio, h_ratio = original_w / resized_w, original_h / resized_h
+        x1 = int(coords[0] * w_ratio)
+        y1 = int(coords[1] * h_ratio)
+        x2 = int(coords[2] * w_ratio)
+        y2 = int(coords[3] * h_ratio)
+
+        x1 = max(0, min(x1, original_w - 1))
+        y1 = max(0, min(y1, original_h - 1))
+        x2 = max(x1 + 1, min(x2, original_w))
+        y2 = max(y1 + 1, min(y2, original_h))
+        return x1, y1, x2, y2
+
+    def predict_base64(self, base64_str: str) -> List[Dict[str, Any]]:
+        if "," in base64_str:
+            base64_str = base64_str.split(",")[1]  # 去除data:image前缀
+
+        image_bytes = base64.b64decode(base64_str)
+        image = Image.open(io.BytesIO(image_bytes))
+
+        return self.predict(image)
+
+    def predict(self, image: Image) -> List[Dict[str, Any]]:
+        # preprocess
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        print("Parsing layout and reading order...")
+        layout_results = self.chat("Parse the reading order of this document.", image)
+
+        # Parse the layout string
+        layout_results_list = self.parse_layout_string(layout_results)
+        if not layout_results_list or not (
+            layout_results.startswith("[") and layout_results.endswith("]")
+        ):
+            layout_results_list = [([0, 0, *image.size], "distorted_page", [])]
+
+        # map bbox to original image coordinates
+        recognition_results = []
+        reading_order = 0
+        for bbox, label, tags in layout_results_list:
+            x1, y1, x2, y2 = self.process_coordinates(bbox, image)
+            recognition_results.append(
+                {
+                    "category": label,
+                    "class_id": -1,
+                    "score": -1,
+                    "bbox": {
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2,
+                    },
+                    "text": "",  # empty for now
+                    "reading_order": reading_order,
+                    "tags": tags,
+                }
+            )
+            reading_order += 1
+
+        return recognition_results
+
+
 class MinerU25Service(LayoutDetectionService):
     CATEGORIES = {
         0: "text",  # 文本
@@ -440,6 +725,10 @@ async def startup_event():
             server_url = os.environ.get("MINERU_SERVER_URL", "http://127.0.0.1:30000")
             model_service = MinerU25Service(server_url)
 
+        elif SERVICE_TYPE == "dolphinv2":
+            model_path = os.environ.get("DOCMODEL_PATH")
+            model_service = DolphinV2Service(model_path)
+
         elif SERVICE_TYPE == "doclayout":
             import torch
 
@@ -516,11 +805,25 @@ async def health_check():
 
 @app.get("/categories")
 async def get_categories():
-    """获取支持的类别列表"""
-    return {
-        "categories": DocLayoutYOLOService.CATEGORIES,
-        "count": len(DocLayoutYOLOService.CATEGORIES),
-    }
+    SERVICE_TYPE = os.environ.get("SERVICE_TYPE", "doclayout")
+
+    if SERVICE_TYPE == "mineru25":
+        return {
+            "categories": MinerU25Service.CATEGORIES,
+            "count": len(MinerU25Service.CATEGORIES),
+        }
+
+    elif SERVICE_TYPE == "dolphinv2":
+        return {
+            "categories": DolphinV2Service.CATEGORIES,
+            "count": len(DolphinV2Service.CATEGORIES),
+        }
+
+    elif SERVICE_TYPE == "doclayout":
+        return {
+            "categories": DocLayoutYOLOService.CATEGORIES,
+            "count": len(DocLayoutYOLOService.CATEGORIES),
+        }
 
 
 if __name__ == "__main__":
