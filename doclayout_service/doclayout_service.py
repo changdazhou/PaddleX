@@ -475,6 +475,23 @@ async def health_check():
     }
 
 
+@app.get("/categories")
+async def get_categories():
+    SERVICE_TYPE = os.environ.get("SERVICE_TYPE", "doclayout")
+
+    if SERVICE_TYPE == "mineru25":
+        return {
+            "categories": MinerU25Service.CATEGORIES,
+            "count": len(MinerU25Service.CATEGORIES),
+        }
+
+    elif SERVICE_TYPE == "doclayout":
+        return {
+            "categories": DocLayoutYOLOService.CATEGORIES,
+            "count": len(DocLayoutYOLOService.CATEGORIES),
+        }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
