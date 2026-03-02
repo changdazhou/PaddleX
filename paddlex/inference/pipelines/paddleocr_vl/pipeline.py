@@ -36,6 +36,7 @@ from ..components import CropByBoxes
 from ..layout_parsing.merge_table import merge_tables_across_pages
 from ..layout_parsing.title_level import assign_levels_to_parsing_res
 from ..layout_parsing.utils import construct_img_path, gather_imgs
+from .mineru_utils import block_content_to_html
 from .result import BaseResult, PaddleOCRVLBlock, PaddleOCRVLResult
 from .uilts import (
     convert_otsl_to_html,
@@ -305,11 +306,15 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 if block_label not in image_labels and block_img is not None:
                     figure_token_map = {}
                     text_prompt = "OCR:"
+                    if self.vl_rec_model.model_name == "MinerU2.5":
+                        text_prompt = "\nText Recognition:"
                     min_pixels = vlm_kwargs.pop("ocr_min_pixels", default_min_pixels)
                     max_pixels = vlm_kwargs.pop("ocr_max_pixels", default_max_pixels)
                     drop_figures = []
                     if block_label == "table":
                         text_prompt = "Table Recognition:"
+                        if self.vl_rec_model.model_name == "MinerU2.5":
+                            text_prompt = "\nTable Recognition:"
                         block_img, figure_token_map, drop_figures = (
                             tokenize_figure_of_table(
                                 block_img, block["box"], imgs_in_doc_for_img
@@ -331,6 +336,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
                     elif "formula" in block_label and block_label != "formula_number":
                         text_prompt = "Formula Recognition:"
+                        if self.vl_rec_model.model_name == "MinerU2.5":
+                            text_prompt = "\nFormula Recognition:"
                         crop_img = crop_margin(block_img)
                         w, h, _ = crop_img.shape
                         if w > 2 and h > 2:
@@ -356,6 +363,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             "seal_max_pixels", default_max_pixels
                         )
                     pixel_key = (min_pixels, max_pixels)
+                    if block_label == "table":
+                        pixel_key = (min_pixels, "table")
                     if pixel_key not in batch_dict_by_pixel:
                         batch_dict_by_pixel[pixel_key] = {
                             "images": [],
@@ -382,6 +391,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
         for pixel_key in batch_dict_by_pixel:
             min_pixels, max_pixels = pixel_key
+            is_table = False
+            if max_pixels == "table":
+                max_pixels = default_max_pixels
+                is_table = True
             kwargs = {
                 "use_cache": True,
                 "min_pixels": min_pixels,
@@ -399,7 +412,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         }
                         for image, query in zip(images, queries)
                     ],
-                    skip_special_tokens=False if has_spotting else True,
+                    skip_special_tokens=False if has_spotting or is_table else True,
                     **kwargs,
                 )
             )
@@ -458,7 +471,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
                     if block_label == "table":
-                        html_str = convert_otsl_to_html(result_str)
+                        html_str = ""
+                        if self.vl_rec_model.model_name == "MinerU2.5":
+                            html_str = block_content_to_html(result_str)
+                        else:
+                            html_str = convert_otsl_to_html(result_str)
                         if html_str != "":
                             result_str = html_str
                     if block_label == "spotting":

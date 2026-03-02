@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -90,7 +89,7 @@ class DetClinetPredictor(BasePredictor):
             f"{self.server_url}/categories",
         )
         categories_dict = response.json()["categories"]
-        custom_map = {
+        self.custom_map = {
             # 第一组 <-> 第二组
             "title": "paragraph_title",
             "equation": "display_formula",
@@ -118,11 +117,33 @@ class DetClinetPredictor(BasePredictor):
             "table_caption": "figure_title",
             "isolate_formula": "display_formula",
             "formula_caption": "formula_number",
+            # 第四组 <-> 第五组
+            "sec_0": "doc_title",
+            "sec_1": "paragraph_title",
+            "sec_2": "paragraph_title",
+            "sec_3": "paragraph_title",
+            "sec_4": "paragraph_title",
+            "sec_5": "paragraph_title",
+            "para": "text",
+            "half_para": "text",
+            "equ": "display_formula",
+            "tab": "table",
+            "code": "algorithm",
+            "fig": "image",
+            "cap": "figure_title",
+            "list": "text",
+            "catalogue": "content",
+            "reference": "reference_content",
+            "header": "header",
+            "foot": "footer",
+            "fnote": "footnote",
+            "watermark": "aside_text",
+            "anno": "text",
         }
 
         # Convert dict like {'0': 'title', '1': 'plain_text', ...} to list ['title', 'plain_text', ...]
         self.labels = [
-            custom_map.get(categories_dict[str(i)], categories_dict[str(i)])
+            self.custom_map.get(categories_dict[str(i)], categories_dict[str(i)])
             for i in range(len(categories_dict))
         ]
         self.labels_to_id = {v: k for k, v in enumerate(self.labels)}
@@ -166,7 +187,12 @@ class DetClinetPredictor(BasePredictor):
             for item in data_list:
                 cls_id = item.get("class_id", 0)
                 if cls_id == -1:
-                    cls_id = self.labels_to_id.get(item.get("category", "0"), 0)
+                    cls_id = self.labels_to_id.get(
+                        self.custom_map.get(
+                            item.get("category", "0"), item.get("category", "0")
+                        ),
+                        0,
+                    )
                 score = item.get("score", 0.0)
                 if score == -1:
                     score = 1.0
