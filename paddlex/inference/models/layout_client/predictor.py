@@ -116,7 +116,7 @@ class DetClinetPredictor(BasePredictor):
             "figure_caption": "figure_title",
             "table_caption": "figure_title",
             "isolate_formula": "display_formula",
-            "formula_caption": "formula_number",
+            "formula_caption": "display_formula",
             # 第四组 <-> 第五组
             "sec_0": "doc_title",
             "sec_1": "paragraph_title",

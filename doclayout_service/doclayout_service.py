@@ -481,7 +481,7 @@ class DocLayoutYOLOService(LayoutDetectionService):
         5: "table",  # 表格
         6: "figure_title",  # 表格标题
         7: "display_formula",  # 独立公式
-        8: "formula_number",  # 公式标题
+        8: "display_formula",  # 公式标题
         9: "inline_formula",  # 行内公式
     }
 

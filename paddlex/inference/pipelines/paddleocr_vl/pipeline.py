@@ -310,6 +310,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         text_prompt = "\nText Recognition:"
                     if self.vl_rec_model.model_name == "Dolphinv2":
                         text_prompt = "Read text in the image."
+                    if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                        text_prompt = "Please output the text content from the image."
                     min_pixels = vlm_kwargs.pop("ocr_min_pixels", default_min_pixels)
                     max_pixels = vlm_kwargs.pop("ocr_max_pixels", default_max_pixels)
                     drop_figures = []
@@ -319,6 +321,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             text_prompt = "\nTable Recognition:"
                         if self.vl_rec_model.model_name == "Dolphinv2":
                             text_prompt = "Parse the table in the image."
+                        if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                            text_prompt = "This is the image of a table. Please output the table in html format."
                         block_img, figure_token_map, drop_figures = (
                             tokenize_figure_of_table(
                                 block_img, block["box"], imgs_in_doc_for_img
@@ -344,6 +348,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             text_prompt = "\nFormula Recognition:"
                         if self.vl_rec_model.model_name == "Dolphinv2":
                             text_prompt = "Read formula in the image."
+                        if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                            text_prompt = "Please write out the expression of the formula in the image using LaTeX format."
                         crop_img = crop_margin(block_img)
                         w, h, _ = crop_img.shape
                         if w > 2 and h > 2:
@@ -480,7 +486,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         html_str = ""
                         if self.vl_rec_model.model_name == "MinerU2.5":
                             html_str = block_content_to_html(result_str)
-                        elif self.vl_rec_model.model_name == "Dolphinv2":
+                        elif self.vl_rec_model.model_name in [
+                            "Dolphinv2",
+                            "MonkeyOCR-pro-3B",
+                        ]:
                             html_str = result_str
                         else:
                             html_str = convert_otsl_to_html(result_str)
