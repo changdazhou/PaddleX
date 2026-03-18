@@ -350,30 +350,30 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             text_prompt = "Read formula in the image."
                         if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
                             text_prompt = "Please write out the expression of the formula in the image using LaTeX format."
-                        crop_img = crop_margin(block_img)
-                        w, h, _ = crop_img.shape
-                        if w > 2 and h > 2:
-                            block_img = crop_img
+                        # crop_img = crop_margin(block_img)
+                        # w, h, _ = crop_img.shape
+                        # if w > 2 and h > 2:
+                        #     block_img = crop_img
                         min_pixels = vlm_kwargs.pop(
                             "formula_min_pixels", default_min_pixels
                         )
                         max_pixels = vlm_kwargs.pop(
                             "formula_max_pixels", default_max_pixels
                         )
-                    elif block_label == "spotting":
-                        text_prompt = "Spotting:"
-                        has_spotting = True
-                        min_pixels = 112896
-                        max_pixels = 1605632
-                        block_img = pre_process_for_spotting(block_img)
-                    elif block_label == "seal" and use_seal_recognition:
-                        text_prompt = "Seal Recognition:"
-                        min_pixels = vlm_kwargs.pop(
-                            "seal_min_pixels", default_min_pixels
-                        )
-                        max_pixels = vlm_kwargs.pop(
-                            "seal_max_pixels", default_max_pixels
-                        )
+                    # elif block_label == "spotting":
+                    #     text_prompt = "Spotting:"
+                    #     has_spotting = True
+                    #     min_pixels = 112896
+                    #     max_pixels = 1605632
+                    #     block_img = pre_process_for_spotting(block_img)
+                    # elif block_label == "seal" and use_seal_recognition:
+                    #     text_prompt = "Seal Recognition:"
+                    #     min_pixels = vlm_kwargs.pop(
+                    #         "seal_min_pixels", default_min_pixels
+                    #     )
+                    #     max_pixels = vlm_kwargs.pop(
+                    #         "seal_max_pixels", default_max_pixels
+                    #     )
                     pixel_key = (min_pixels, max_pixels)
                     if block_label == "table":
                         pixel_key = (min_pixels, "table")
@@ -482,6 +482,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
+                    if self.vl_rec_model.model_name == "MinerU2.5" and block_label == "display_formula":
+                        if not result_str.startswith(' $$'):
+                            result_str = ' $$ ' + result_str + ' $$ '
                     if block_label == "table":
                         html_str = ""
                         if self.vl_rec_model.model_name == "MinerU2.5":

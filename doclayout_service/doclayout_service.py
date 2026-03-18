@@ -484,6 +484,33 @@ class DocLayoutYOLOService(LayoutDetectionService):
         8: "display_formula",  # 公式标题
         9: "inline_formula",  # 行内公式
     }
+    CATEGORIES = {
+        0: "abstract",
+        1: "algorithm",
+        2: "aside_text",
+        3: "chart",
+        4: "content",
+        5: "display_formula",
+        6: "doc_title",
+        7: "figure_title",
+        8: "footer",
+        9: "footer_image",
+        10: "footnote",
+        11: "formula_number",
+        12: "header",
+        13: "header_image",
+        14: "image",
+        15: "inline_formula",
+        16: "number",
+        17: "paragraph_title",
+        18: "reference",
+        19: "reference_content",
+        20: "seal",
+        21: "table",
+        22: "text",
+        23: "vertical_text",
+        24: "vision_footnote"
+    }
 
     def __init__(
         self,
