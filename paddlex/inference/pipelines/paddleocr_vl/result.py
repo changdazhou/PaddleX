@@ -376,6 +376,7 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
         data["height"] = self["height"]
         model_settings = self["model_settings"]
         data["model_settings"] = model_settings
+        use_seal_recognition = self["model_settings"].get("use_seal_recognition", False)
         if self["model_settings"].get("format_block_content", False):
             handle_funcs_dict = self._build_handle_funcs_dict(pretty=True)
 

@@ -801,7 +801,7 @@ def otsl_parse_texts(texts, tokens):
     return table_cells, split_row_tokens
 
 
-def export_to_html(table_data: TableData):
+def export_to_html(table_data: TableData, escape=True):
     """
     Export TableData to HTML table.
 
@@ -825,7 +825,10 @@ def export_to_html(table_data: TableData):
             colspan, colstart = (cell.col_span, cell.start_col_offset_idx)
             if rowstart != i or colstart != j:
                 continue
-            content = html.escape(cell.text.strip())
+            if escape:
+                content = html.escape(cell.text.strip())
+            else:
+                content = (cell.text or "").strip()
             celltag = "th" if cell.column_header else "td"
             opening_tag = f"{celltag}"
             if rowspan > 1:
@@ -896,7 +899,7 @@ def otsl_pad_to_sqr_v2(otsl_str: str) -> str:
     return OTSL_NL.join(repaired_lines) + OTSL_NL
 
 
-def convert_otsl_to_html(otsl_content: str):
+def convert_otsl_to_html(otsl_content: str, escape=True):
     """
     Convert OTSL-v1.0 string to HTML. Only 6 tags allowed: <fcel>, <ecel>, <nl>, <lcel>, <ucel>, <xcel>.
 
@@ -914,7 +917,7 @@ def convert_otsl_to_html(otsl_content: str):
         num_cols=(max(len(row) for row in split_row_tokens) if split_row_tokens else 0),
         table_cells=table_cells,
     )
-    return export_to_html(table_data)
+    return export_to_html(table_data, escape)
 
 
 def find_shortest_repeating_substring(s: str) -> Union[str, None]:
