@@ -74,8 +74,8 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
 
         Args:
             pred (Sequence[Any]): The input predictions, which can be either a list of 3 or 4 elements.
-                - When len(pred) == 4, it is expected to be in the format [boxes, class_ids, scores, masks],
-                  compatible with SOLOv2 output.
+                - When len(pred) == 6, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
+                  compatible with Modeling_V2 output.
                 - When len(pred) == 3, it is expected to be in the format [boxes, box_nums, masks],
                   compatible with Instance Segmentation output.
 
