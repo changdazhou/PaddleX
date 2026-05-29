@@ -75,6 +75,14 @@ class CropByBoxes(BaseOperator):
                 img_crop[~mask] = 255
                 out_info["img"] = img_crop
                 out_info["polygon_points"] = box_info["polygon_points"]
+            elif layout_shape_mode != "rect" and "quad" in box_info:
+                polygon = np.array(box_info["quad"], dtype=np.int32).reshape((-1, 1, 2))
+                polygon = polygon - np.array([xmin, ymin])
+                mask = np.zeros(img_crop.shape[:2], dtype=np.int32)
+                cv2.fillPoly(mask, [polygon], 1)
+                img_crop[~mask.astype(bool)] = 255
+                out_info["img"] = img_crop
+                out_info["quad"] = box_info["quad"]
 
             output_list.append(out_info)
         return output_list

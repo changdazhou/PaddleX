@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, List, Optional, Tuple, Union
+# from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from PIL import Image
@@ -66,6 +67,126 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
 
     def _get_result_class(self):
         return LayoutAnalysisResult
+
+    def _format_output(self, pred: Sequence[Any]) -> List[dict]:
+        """
+        Transform batch outputs into a list of single image output.
+
+        Args:
+            pred (Sequence[Any]): The input predictions, which can be either a list of 3 or 4 elements.
+                - When len(pred) == 6, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
+                  compatible with Modeling_V2 output.
+                - When len(pred) == 3, it is expected to be in the format [boxes, box_nums, masks],
+                  compatible with Instance Segmentation output.
+
+        Returns:
+            List[dict]: A list of dictionaries, each containing either 'class_id' and 'masks' (for SOLOv2),
+                or 'boxes' and 'masks' (for Instance Segmentation), or just 'boxes' if no masks are provided.
+        """
+        box_idx_start = 0
+        pred_box = []
+
+        # DocLayoutV3 V2: 6 outputs (bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits)
+        if len(pred) == 6:
+            bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits = pred
+
+            # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
+            quad_all = None
+            if bbox_pred.shape[1] == 10:
+                quad_all = bbox_pred[:, 2:10].copy()  # [B*K, 8]
+                xs = quad_all[:, 0::2]  # x1, x2, x3, x4
+                ys = quad_all[:, 1::2]  # y1, y2, y3, y4
+                bbox_pred = np.column_stack(
+                    [
+                        bbox_pred[:, 0],
+                        bbox_pred[:, 1],
+                        xs.min(axis=1),
+                        ys.min(axis=1),
+                        xs.max(axis=1),
+                        ys.max(axis=1),
+                    ]
+                )
+
+            results = []
+            box_idx_start = 0
+            for idx in range(len(bbox_num)):
+                K = int(bbox_num[idx])
+                box_idx_end = box_idx_start + K
+                result_dict = {
+                    "boxes": bbox_pred[box_idx_start:box_idx_end],
+                    "masks": mask_pred[box_idx_start:box_idx_end],
+                    "rel_logits": rel_logits[idx],
+                    "roor_logits": roor_logits[idx],
+                    "qi": qi[idx, :K],
+                }
+                if quad_all is not None:
+                    result_dict["quad"] = quad_all[box_idx_start:box_idx_end]
+                else:
+                    result_dict["quad"] = None
+                results.append(result_dict)
+                box_idx_start = box_idx_end
+            return results
+
+        # DocLayoutV2 without mask: 5 outputs (bbox_pred, bbox_num, qi, rel_logits, roor_logits)
+        if len(pred) == 5:
+            bbox_pred, bbox_num, qi, rel_logits, roor_logits = pred
+
+            # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
+            quad_all = None
+            if bbox_pred.shape[1] == 10:
+                quad_all = bbox_pred[:, 2:10].copy()  # [B*K, 8]
+                xs = quad_all[:, 0::2]
+                ys = quad_all[:, 1::2]
+                bbox_pred = np.column_stack(
+                    [
+                        bbox_pred[:, 0],
+                        bbox_pred[:, 1],
+                        xs.min(axis=1),
+                        ys.min(axis=1),
+                        xs.max(axis=1),
+                        ys.max(axis=1),
+                    ]
+                )
+
+            results = []
+            box_idx_start = 0
+            for idx in range(len(bbox_num)):
+                K = int(bbox_num[idx])
+                box_idx_end = box_idx_start + K
+                result_dict = {
+                    "boxes": bbox_pred[box_idx_start:box_idx_end],
+                    "rel_logits": rel_logits[idx],
+                    "roor_logits": roor_logits[idx],
+                    "qi": qi[idx, :K],
+                }
+                if quad_all is not None:
+                    result_dict["quad"] = quad_all[box_idx_start:box_idx_end]
+                else:
+                    result_dict["quad"] = None
+                results.append(result_dict)
+                box_idx_start = box_idx_end
+            return results
+
+        if len(pred) == 3:
+            # Adapt to Instance Segmentation
+            pred_mask = []
+        for idx in range(len(pred[1])):
+            np_boxes_num = pred[1][idx]
+            box_idx_end = box_idx_start + np_boxes_num
+            np_boxes = pred[0][box_idx_start:box_idx_end]
+            pred_box.append(np_boxes)
+            if len(pred) == 3:
+                np_masks = pred[2][box_idx_start:box_idx_end]
+                pred_mask.append(np_masks)
+            box_idx_start = box_idx_end
+
+        if len(pred) == 3:
+            return [
+                {"boxes": np.asarray(pred_box[i]), "masks": np.asarray(pred_mask[i])}
+                for i in range(len(pred_box))
+            ]
+        else:
+            return [{"boxes": np.array(res)} for res in pred_box]
 
     def process(
         self,

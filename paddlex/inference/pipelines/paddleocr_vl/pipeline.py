@@ -608,6 +608,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     content=block_content,
                     group_id=block.get("group_id", None),
                     polygon_points=block.get("polygon_points", None),
+                    quad=block.get("quad", None),
                 )
                 if block_label == "table":
                     table_blocks.append(
@@ -1281,6 +1282,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     label=block["block_label"],
                     bbox=block["block_bbox"],
                     polygon_points=block.get("block_polygon_points", None),
+                    quad=block.get("block_quad", None),
                     content=re.sub(r"^#+\s", "", block["block_content"]),
                     group_id=block.get("group_id", None),
                 )

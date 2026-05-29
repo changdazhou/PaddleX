@@ -24,6 +24,7 @@ import numpy as np
 from PIL import Image
 from pydantic import BaseModel, computed_field, model_validator
 
+from ...models.layout_analysis.processors import quad_area, quad_overlap_ratio
 from ..layout_parsing.utils import (
     calculate_overlap_ratio,
     calculate_projection_overlap_ratio,
@@ -137,7 +138,15 @@ def filter_overlap_boxes(
         for j in range(i + 1, len(boxes)):
             if i in dropped_indexes or j in dropped_indexes:
                 continue
-            overlap_ratio = overlap_matrix[i, j]
+            # Use quad polygon overlap if both boxes have quad
+            if "quad" in boxes[i] and "quad" in boxes[j]:
+                overlap_ratio = quad_overlap_ratio(
+                    np.array(boxes[i]["quad"]).flatten(),
+                    np.array(boxes[j]["quad"]).flatten(),
+                    "small",
+                )
+            else:
+                overlap_ratio = overlap_matrix[i, j]
             if (
                 boxes[i]["label"] == "inline_formula"
                 or boxes[j]["label"] == "inline_formula"
@@ -164,7 +173,16 @@ def filter_overlap_boxes(
                         "chart",
                     }:
                         continue
-                if areas[i] >= areas[j]:
+                # Use quad area if available
+                if "quad" in boxes[i]:
+                    area_i = quad_area(np.array(boxes[i]["quad"]).flatten())
+                else:
+                    area_i = areas[i]
+                if "quad" in boxes[j]:
+                    area_j = quad_area(np.array(boxes[j]["quad"]).flatten())
+                else:
+                    area_j = areas[j]
+                if area_i >= area_j:
                     dropped_indexes.add(j)
                 else:
                     dropped_indexes.add(i)

@@ -72,6 +72,7 @@ class PaddleOCRVLBlock(object):
         content="",
         group_id=None,
         polygon_points=None,
+        quad=None,
         global_block_id=None,
         global_group_id=None,
     ) -> None:
@@ -88,6 +89,7 @@ class PaddleOCRVLBlock(object):
         self.content = content
         self.image = None
         self.polygon_points = polygon_points
+        self.quad = quad
         self.group_id = group_id
         self.global_block_id = global_block_id
         self.global_group_id = global_group_id
@@ -411,6 +413,8 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
                 res_dict["global_group_id"] = parsing_res.global_group_id
             if parsing_res.polygon_points is not None:
                 res_dict["block_polygon_points"] = parsing_res.polygon_points
+            if parsing_res.quad is not None:
+                res_dict["block_quad"] = parsing_res.quad
 
             if _keep_img and parsing_res.image is not None:
                 res_dict["image"] = parsing_res.image
