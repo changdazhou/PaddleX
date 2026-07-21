@@ -76,8 +76,14 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
             pred (Sequence[Any]): The input predictions, which can be either a list of 3 or 4 elements.
                 - When len(pred) == 6, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
                   compatible with Modeling_V2 output.
+                - When len(pred) == 5, it is expected to be in the format [bbox_pred, bbox_num, qi, rel_logits, roor_logits],
+                  compatible with DocLayoutV2 (no mask) output.
                 - When len(pred) == 3, it is expected to be in the format [boxes, box_nums, masks],
                   compatible with Instance Segmentation output.
+                - Otherwise it is treated as plain detection output [bbox_pred, bbox_num].
+                  In this case bbox_pred may have 6 columns (2-point box) or 10 columns
+                  (4-point / quad box); the quad is detected by column count and extracted
+                  automatically when present, so both models stay compatible.
 
         Returns:
             List[dict]: A list of dictionaries, each containing either 'class_id' and 'masks' (for SOLOv2),
@@ -170,11 +176,46 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         if len(pred) == 3:
             # Adapt to Instance Segmentation
             pred_mask = []
+
+        # Detect 4-point (quad) box output by column count instead of by
+        # len(pred), so any plain-detection output remains compatible.
+        # Quad models put the 8 corner coords at columns 2:10. There may be
+        # trailing metadata columns after the quad (e.g. a pre-decoded
+        # reading-order column -> 11 cols); those are kept and appended after
+        # the 6-column AABB so the post-processor can sort by them
+        # (it recognizes 7-/8-column ordered-detection boxes).
+        bbox_all = pred[0]
+        quad_all = None
+        if (
+            len(pred) != 3
+            and hasattr(bbox_all, "ndim")
+            and bbox_all.ndim == 2
+            and bbox_all.shape[1] >= 10
+        ):
+            quad_all = bbox_all[:, 2:10].copy()  # [B*K, 8]
+            xs = quad_all[:, 0::2]  # x1, x2, x3, x4
+            ys = quad_all[:, 1::2]  # y1, y2, y3, y4
+            cols = [
+                bbox_all[:, 0],
+                bbox_all[:, 1],
+                xs.min(axis=1),
+                ys.min(axis=1),
+                xs.max(axis=1),
+                ys.max(axis=1),
+            ]
+            # Preserve any trailing columns (reading order, etc.) after the quad.
+            if bbox_all.shape[1] > 10:
+                cols.append(bbox_all[:, 10:])
+            bbox_all = np.column_stack(cols)
+
+        pred_quad = []
         for idx in range(len(pred[1])):
             np_boxes_num = pred[1][idx]
             box_idx_end = box_idx_start + np_boxes_num
-            np_boxes = pred[0][box_idx_start:box_idx_end]
+            np_boxes = bbox_all[box_idx_start:box_idx_end]
             pred_box.append(np_boxes)
+            if quad_all is not None:
+                pred_quad.append(quad_all[box_idx_start:box_idx_end])
             if len(pred) == 3:
                 np_masks = pred[2][box_idx_start:box_idx_end]
                 pred_mask.append(np_masks)
@@ -183,6 +224,11 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         if len(pred) == 3:
             return [
                 {"boxes": np.asarray(pred_box[i]), "masks": np.asarray(pred_mask[i])}
+                for i in range(len(pred_box))
+            ]
+        elif quad_all is not None:
+            return [
+                {"boxes": np.array(pred_box[i]), "quad": pred_quad[i]}
                 for i in range(len(pred_box))
             ]
         else:
