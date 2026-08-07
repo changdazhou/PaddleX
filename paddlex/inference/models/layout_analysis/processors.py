@@ -695,6 +695,49 @@ def quad_is_contained(quad1, quad2):
     return p1.intersection(p2).area / p1.area >= 0.9
 
 
+def _prepare_quad_geoms(quads):
+    """Precompute shapely polygons, areas and axis-aligned bounding boxes once.
+
+    Building shapely polygons is expensive, so we do it a single time per box
+    instead of rebuilding two polygons for every O(N^2) pair. The returned AABBs
+    enable a cheap disjointness pre-filter: if two AABBs do not overlap, the
+    polygons cannot intersect, so their IoU / overlap is exactly 0 and the
+    shapely intersection can be skipped entirely (numerically identical result).
+
+    Args:
+        quads: ndarray [N, 8], each row [x1,y1,x2,y2,x3,y3,x4,y4].
+    Returns:
+        (polys, areas[N], aabb[N, 4]) where aabb rows are [xmin,ymin,xmax,ymax].
+        Polygon validity is repaired with buffer(0), matching quad_iou/
+        quad_overlap_ratio/quad_is_contained; areas are taken from the repaired
+        polygon so ratios match the original implementations exactly.
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon
+
+    n = len(quads)
+    polys = [None] * n
+    areas = np.zeros(n, dtype=np.float64)
+    aabb = np.zeros((n, 4), dtype=np.float64)
+    for k in range(n):
+        pts = np.asarray(quads[k], dtype=np.float64).reshape(4, 2)
+        p = ShapelyPolygon(pts)
+        if not p.is_valid:
+            p = p.buffer(0)
+        polys[k] = p
+        areas[k] = p.area
+        aabb[k, 0] = pts[:, 0].min()
+        aabb[k, 1] = pts[:, 1].min()
+        aabb[k, 2] = pts[:, 0].max()
+        aabb[k, 3] = pts[:, 1].max()
+    return polys, areas, aabb
+
+
+def _aabb_disjoint(a, b):
+    """True if two AABBs [xmin,ymin,xmax,ymax] do not overlap (touch counts as
+    disjoint since a shared edge has zero intersection area)."""
+    return a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+
+
 def nms_quad(boxes, quad, iou_same=0.6, iou_diff=0.95):
     """NMS using quad polygon IoU.
     Corresponds to nms(boxes, iou_same, iou_diff) with identical logic:
@@ -707,6 +750,10 @@ def nms_quad(boxes, quad, iou_same=0.6, iou_diff=0.95):
     Returns:
         list of selected indices
     """
+    quad = np.asarray(quad)
+    n = len(quad)
+    polys, areas, aabb = _prepare_quad_geoms(quad.reshape(n, 8))
+
     scores = boxes[:, 1]
     indices = np.argsort(scores)[::-1].tolist()
     selected = []
@@ -716,9 +763,18 @@ def nms_quad(boxes, quad, iou_same=0.6, iou_diff=0.95):
         selected.append(current)
         remaining = []
         current_class = boxes[current, 0]
+        cp = polys[current]
+        ca = areas[current]
+        cbox = aabb[current]
         for i in indices:
-            iou_val = quad_iou(quad[current], quad[i])
             threshold = iou_same if current_class == boxes[i, 0] else iou_diff
+            if _aabb_disjoint(cbox, aabb[i]):
+                # Disjoint AABBs => IoU 0 < threshold => box is kept.
+                remaining.append(i)
+                continue
+            inter = cp.intersection(polys[i]).area
+            union_area = ca + areas[i] - inter
+            iou_val = inter / union_area if union_area > 0 else 0.0
             if iou_val < threshold:
                 remaining.append(i)
         indices = remaining
@@ -739,8 +795,19 @@ def check_containment_quad(
         (contains_other, contained_by_other): ndarray [N] each
     """
     n = len(quad)
+    quad = np.asarray(quad)
+    polys, areas, aabb = _prepare_quad_geoms(quad.reshape(n, 8))
     contains_other = np.zeros(n, dtype=int)
     contained_by_other = np.zeros(n, dtype=int)
+
+    def _contained(i, j):
+        # quad[i] contained in quad[j]: inter_area / area_i >= 0.9
+        if areas[i] <= 0:
+            return False
+        if _aabb_disjoint(aabb[i], aabb[j]):
+            return False
+        inter = polys[i].intersection(polys[j]).area
+        return inter / areas[i] >= 0.9
 
     for i in range(n):
         for j in range(n):
@@ -751,15 +818,15 @@ def check_containment_quad(
                     continue
             if category_index is not None and mode is not None:
                 if mode == "large" and class_ids[j] == category_index:
-                    if quad_is_contained(quad[i], quad[j]):
+                    if _contained(i, j):
                         contained_by_other[i] = 1
                         contains_other[j] = 1
                 if mode == "small" and class_ids[i] == category_index:
-                    if quad_is_contained(quad[i], quad[j]):
+                    if _contained(i, j):
                         contained_by_other[i] = 1
                         contains_other[j] = 1
             else:
-                if quad_is_contained(quad[i], quad[j]):
+                if _contained(i, j):
                     contained_by_other[i] = 1
                     contains_other[j] = 1
     return contains_other, contained_by_other
@@ -780,6 +847,30 @@ def filter_boxes(
     boxes = [box for box in src_boxes if box["label"] != "reference"]
     dropped_indexes = set()
 
+    # Precompute quad polygons/areas/AABBs once (instead of rebuilding two
+    # shapely polygons per O(N^2) pair). Entries are None for boxes without quad.
+    n_boxes = len(boxes)
+    _qpoly = [None] * n_boxes
+    _qarea = [0.0] * n_boxes
+    _qaabb = [None] * n_boxes
+    if any("quad" in box for box in boxes):
+        from shapely.geometry import Polygon as ShapelyPolygon
+
+        for k in range(n_boxes):
+            if "quad" in boxes[k]:
+                pts = np.array(boxes[k]["quad"], dtype=np.float64).reshape(4, 2)
+                p = ShapelyPolygon(pts)
+                if not p.is_valid:
+                    p = p.buffer(0)
+                _qpoly[k] = p
+                _qarea[k] = p.area
+                _qaabb[k] = (
+                    pts[:, 0].min(),
+                    pts[:, 1].min(),
+                    pts[:, 0].max(),
+                    pts[:, 1].max(),
+                )
+
     for i in range(len(boxes)):
         x1, y1, x2, y2 = boxes[i]["coordinate"]
         w, h = x2 - x1, y2 - y1
@@ -790,11 +881,13 @@ def filter_boxes(
                 continue
             # Use quad overlap if both boxes have quad
             if "quad" in boxes[i] and "quad" in boxes[j]:
-                overlap_ratio = quad_overlap_ratio(
-                    np.array(boxes[i]["quad"]).flatten(),
-                    np.array(boxes[j]["quad"]).flatten(),
-                    "small",
-                )
+                # AABB pre-filter: disjoint AABBs => overlap ratio is exactly 0.
+                if _aabb_disjoint(_qaabb[i], _qaabb[j]):
+                    overlap_ratio = 0.0
+                else:
+                    inter = _qpoly[i].intersection(_qpoly[j]).area
+                    ref = min(_qarea[i], _qarea[j])
+                    overlap_ratio = inter / ref if ref > 0 else 0.0
             else:
                 overlap_ratio = calculate_overlap_ratio(
                     boxes[i]["coordinate"], boxes[j]["coordinate"], "small"

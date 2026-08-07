@@ -37,6 +37,9 @@ from ..layout_parsing.merge_table import merge_tables_across_pages
 from ..layout_parsing.title_level import assign_levels_to_parsing_res
 from ..layout_parsing.utils import construct_img_path, gather_imgs
 from .result import BaseResult, PaddleOCRVLBlock, PaddleOCRVLResult
+
+from .mineru_utils import block_content_to_html
+
 from .uilts import (
     convert_otsl_to_html,
     crop_margin,
@@ -44,6 +47,7 @@ from .uilts import (
     merge_blocks,
     post_process_for_spotting,
     pre_process_for_spotting,
+    resize_image_to_pixel_range,
     tokenize_figure_of_table,
     truncate_repetitive_content,
     untokenize_figure_of_table,
@@ -306,11 +310,23 @@ class _PaddleOCRVLPipeline(BasePipeline):
             ):
                 figure_token_map = {}
                 text_prompt = "OCR:"
+                if self.vl_rec_model.model_name == "MinerU2.5":
+                        text_prompt = "\nText Recognition:"
+                if self.vl_rec_model.model_name == "Dolphinv2":
+                        text_prompt = "Read text in the image."
+                if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                        text_prompt = "Please output the text content from the image."
                 blk_min_pixels = layout_prep_cfg["ocr_min_pixels"]
                 blk_max_pixels = layout_prep_cfg["ocr_max_pixels"]
                 drop_figures = []
                 if block_label == "table":
                     text_prompt = "Table Recognition:"
+                    if self.vl_rec_model.model_name == "MinerU2.5":
+                            text_prompt = "\nTable Recognition:"
+                    if self.vl_rec_model.model_name == "Dolphinv2":
+                            text_prompt = "Parse the table in the image."
+                    if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                            text_prompt = "This is the image of a table. Please output the table in html format."
                     block_img, figure_token_map, drop_figures = (
                         tokenize_figure_of_table(
                             block_img, block["box"], imgs_in_doc_for_img
@@ -326,6 +342,12 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     blk_max_pixels = layout_prep_cfg["chart_max_pixels"]
                 elif "formula" in block_label and block_label != "formula_number":
                     text_prompt = "Formula Recognition:"
+                    if self.vl_rec_model.model_name == "MinerU2.5":
+                            text_prompt = "\nFormula Recognition:"
+                    if self.vl_rec_model.model_name == "Dolphinv2":
+                            text_prompt = "Read formula in the image."
+                    if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                            text_prompt = "Please write out the expression of the formula in the image using LaTeX format."
                     crop_img = crop_margin(block_img)
                     w, h, _ = crop_img.shape
                     if w > 2 and h > 2:
@@ -343,13 +365,27 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     blk_min_pixels = layout_prep_cfg["seal_min_pixels"]
                     blk_max_pixels = layout_prep_cfg["seal_max_pixels"]
 
+                pixel_key = (blk_min_pixels, blk_max_pixels)
+                if block_label == "table":
+                    # 表格单独成批：需保留 OTSL 结构特殊 token（<fcel>/<nl> 等），
+                    # 故打上 "table" 标记，供批量推理阶段将 skip_special_tokens 置为 False。
+                    pixel_key = (blk_min_pixels, blk_max_pixels, "table")
+                if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
+                    # MonkeyOCR-pro-3B 服务端 Qwen2.5-VL 处理器已内置 size 配置，
+                    # 不能再通过 mm_processor_kwargs 下发 min_pixels/max_pixels
+                    # （会与 size 冲突触发 400）。因此改在客户端按 smart_resize
+                    # 把裁剪块预缩放到 [min_pixels, max_pixels]，保证过小的块也能
+                    # 被正确 tokenize/识别，避免“太小无法识别”。
+                    block_img = resize_image_to_pixel_range(
+                        block_img, blk_min_pixels, blk_max_pixels
+                    )
                 page_vlm_entries.append(
                     (
                         page_idx,
                         j,
                         block_img,
                         text_prompt,
-                        (blk_min_pixels, blk_max_pixels),
+                        pixel_key,
                         figure_token_map,
                     )
                 )
@@ -504,14 +540,22 @@ class _PaddleOCRVLPipeline(BasePipeline):
         elif vlm_kwargs.get("max_new_tokens", None) is None:
             vlm_kwargs["max_new_tokens"] = 4096
 
+        # MonkeyOCR-pro-3B 的服务端 Qwen2.5-VL 处理器已内置 size 配置，
+        # 若再通过 mm_processor_kwargs 下发 min_pixels/max_pixels，会与其
+        # size={shortest_edge, longest_edge} 冲突并触发 400 BadRequest，
+        # 故对该模型不下发像素约束，交由服务端自身 size 处理。
+        forward_pixels = self.vl_rec_model.model_name != "MonkeyOCR-pro-3B"
         for pixel_key in batch_dict_by_pixel:
-            min_px, max_px = pixel_key
+            # 表格批的 pixel_key 是三元组 (min, max, "table")，需保留特殊 token
+            is_table = len(pixel_key) == 3
+            min_px, max_px = pixel_key[0], pixel_key[1]
             kwargs = {
                 "use_cache": True,
-                "min_pixels": min_px,
-                "max_pixels": max_px,
                 **vlm_kwargs,
             }
+            if forward_pixels:
+                kwargs["min_pixels"] = min_px
+                kwargs["max_pixels"] = max_px
             pv_images = batch_dict_by_pixel[pixel_key]["images"]
             queries = batch_dict_by_pixel[pixel_key]["queries"]
             batch_results = list(
@@ -523,7 +567,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         }
                         for image, query in zip(pv_images, queries)
                     ],
-                    skip_special_tokens=False if has_spotting else True,
+                    skip_special_tokens=False if (has_spotting or is_table) else True,
                     **kwargs,
                 )
             )
@@ -591,8 +635,23 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
+                    if (
+                        self.vl_rec_model.model_name == "MinerU2.5"
+                        and block_label == "display_formula"
+                    ):
+                        if not result_str.startswith(" $$"):
+                            result_str = " $$ " + result_str + " $$ "
                     if block_label == "table":
-                        html_str = convert_otsl_to_html(result_str)
+                        html_str = ""
+                        if self.vl_rec_model.model_name == "MinerU2.5":
+                            html_str = block_content_to_html(result_str)
+                        elif self.vl_rec_model.model_name in [
+                            "Dolphinv2",
+                            "MonkeyOCR-pro-3B",
+                        ]:
+                            html_str = result_str
+                        else:
+                            html_str = convert_otsl_to_html(result_str)
                         if html_str != "":
                             result_str = html_str
                     if block_label == "spotting":
