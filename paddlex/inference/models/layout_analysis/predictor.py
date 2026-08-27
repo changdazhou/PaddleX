@@ -74,10 +74,13 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
 
         Args:
             pred (Sequence[Any]): The input predictions, which can be either a list of 3 or 4 elements.
-                - When len(pred) == 6, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
+                - When len(pred) == 6 and pred[2] is 3-D, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
                   compatible with Modeling_V2 output.
                 - When len(pred) == 5, it is expected to be in the format [bbox_pred, bbox_num, qi, rel_logits, roor_logits],
                   compatible with DocLayoutV2 (no mask) output.
+                - When len(pred) == 6 and pred[2] is 2-D, it is the same as the
+                  5-output case plus a trailing page-rotation tensor of shape
+                  [batch, 2] holding (angle in degrees, quadrant confidence).
                 - When len(pred) == 3, it is expected to be in the format [boxes, box_nums, masks],
                   compatible with Instance Segmentation output.
                 - Otherwise it is treated as plain detection output [bbox_pred, bbox_num].
@@ -93,7 +96,10 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         pred_box = []
 
         # DocLayoutV3 V2: 6 outputs (bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits)
-        if len(pred) == 6:
+        # `pred[2].ndim == 3` separates this from the maskless + angle model
+        # below, which also has 6 outputs but carries `qi` ([B, K], 2-D) in that
+        # slot instead of a mask batch ([N, H, W], 3-D).
+        if len(pred) == 6 and pred[2].ndim == 3:
             bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits = pred
 
             # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
@@ -133,9 +139,17 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
                 box_idx_start = box_idx_end
             return results
 
-        # DocLayoutV2 without mask: 5 outputs (bbox_pred, bbox_num, qi, rel_logits, roor_logits)
-        if len(pred) == 5:
-            bbox_pred, bbox_num, qi, rel_logits, roor_logits = pred
+        # DocLayoutV2 without mask: 5 outputs (bbox_pred, bbox_num, qi, rel_logits, roor_logits),
+        # or 6 when the model also predicts the page rotation, which arrives as a
+        # trailing [B, 2] tensor of (angle in degrees, quadrant confidence).
+        if len(pred) == 5 or len(pred) == 6:
+            bbox_pred, bbox_num, qi, rel_logits, roor_logits = pred[:5]
+            angle = pred[5] if len(pred) == 6 else None
+            if angle is not None and (angle.ndim != 2 or angle.shape[1] != 2):
+                raise ValueError(
+                    f"Expected the 6th output to be the page rotation with shape "
+                    f"[batch, 2], got {angle.shape}."
+                )
 
             # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
             quad_all = None
@@ -169,6 +183,9 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
                     result_dict["quad"] = quad_all[box_idx_start:box_idx_end]
                 else:
                     result_dict["quad"] = None
+                if angle is not None:
+                    result_dict["page_angle"] = float(angle[idx, 0])
+                    result_dict["page_angle_conf"] = float(angle[idx, 1])
                 results.append(result_dict)
                 box_idx_start = box_idx_end
             return results
@@ -289,12 +306,23 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
             skip_order_labels=skip_order_labels,
         )
 
-        return {
+        result = {
             "input_path": batch_data.input_paths,
             "page_index": batch_data.page_indexes,
             "input_img": [data["ori_img"] for data in datas],
             "boxes": boxes,
         }
+        # Image-level, so it never goes through the box post-processor.  Added
+        # only for models that predict it, to leave every other model's result
+        # (and its serialized JSON) unchanged.  `BasePredictor.apply` splits this
+        # dict of lists by index, so each single-image result ends up with its
+        # own scalar.
+        if any("page_angle" in pred for pred in preds_list):
+            result["page_angle"] = [pred.get("page_angle") for pred in preds_list]
+            result["page_angle_conf"] = [
+                pred.get("page_angle_conf") for pred in preds_list
+            ]
+        return result
 
     @DetRunnerPredictor.register("Resize")
     def build_resize(self, target_size, keep_ratio=False, interp=2):
