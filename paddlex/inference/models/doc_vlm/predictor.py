@@ -444,6 +444,7 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
             top_p=top_p,
             min_pixels=min_pixels,
             max_pixels=max_pixels,
+            **kwargs,
         )
         return format_doc_vlm_result_dict(preds, data, add_input_path=True)
 
@@ -460,6 +461,7 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
         top_p,
         min_pixels,
         max_pixels,
+        **kwargs,
     ):
         specs = []
         for item in data:
@@ -484,12 +486,18 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
 
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(image)
-                with io.BytesIO() as buf:
-                    img.save(buf, format=image_format)
-                    image_url = (
-                        f"data:image/{image_format.lower()};base64,"
-                        + base64.b64encode(buf.getvalue()).decode("ascii")
-                    )
+                if kwargs.get("use_layout_detection"):
+                    with io.BytesIO() as buf:
+                        img.save(buf, format="JPEG")
+                        image_url = "data:image/jpeg;base64," + base64.b64encode(
+                            buf.getvalue()
+                        ).decode("ascii")
+                else:
+                    with io.BytesIO() as buf:
+                        img.save(buf, format="PNG")
+                        image_url = "data:image/png;base64," + base64.b64encode(
+                            buf.getvalue()
+                        ).decode("ascii")
             else:
                 raise TypeError(f"Not supported image type: {type(image)}")
 
@@ -589,11 +597,13 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
         top_p,
         min_pixels,
         max_pixels,
+        **kwargs,
     ):
         client = self.genai_client
         futures = []
         image_format = "PNG" if client.backend == "llama-cpp-server" else "JPEG"
         try:
+
             specs = self._doc_vlm_genai_build_request_specs(
                 client,
                 data,
@@ -605,6 +615,7 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
                 top_p,
                 min_pixels,
                 max_pixels,
+                **kwargs,
             )
             for messages, request_kwargs in specs:
                 future = client.create_chat_completion(

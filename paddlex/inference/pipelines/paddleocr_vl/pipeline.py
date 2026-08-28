@@ -30,6 +30,7 @@ from ...common.batch_sampler import ImageBatchSampler
 from ...common.reader import ReadImage
 from ...models import HPIConfig, PaddlePredictorOption
 from ...utils.benchmark import benchmark
+from ...utils.xycut import xycut_sort
 from .._parallel import AutoParallelImageSimpleInferencePipeline
 from ..base import BasePipeline
 from ..components import CropByBoxes
@@ -118,10 +119,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     {"model_config_error": "config error for layout_det_model!"},
                 )
                 model_name = layout_det_config.get("model_name", None)
-                assert model_name is not None and model_name in [
-                    "PP-DocLayoutV2",
-                    "PP-DocLayoutV3",
-                ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
+                # assert model_name is not None and model_name in [
+                #     "PP-DocLayoutV2",
+                #     "PP-DocLayoutV3",
+                # ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
                 layout_kwargs = {}
                 if (threshold := layout_det_config.get("threshold", None)) is not None:
                     layout_kwargs["threshold"] = threshold
@@ -205,6 +206,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_ocr_for_image_block: Union[bool, None],
         format_block_content: Union[bool, None],
         merge_layout_blocks: Union[bool, None],
+        markdown_ignore_labels: Optional[list[str]] = None,
+        use_xycut: Union[bool, None] = None,
         use_layout_angle: Union[bool, None] = None,
         markdown_ignore_labels: Optional[List[str]] = None,
     ) -> dict:
@@ -251,6 +254,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
         if markdown_ignore_labels is None:
             markdown_ignore_labels = self.markdown_ignore_labels
 
+        if use_xycut is None:
+            use_xycut = False
+
         return dict(
             use_doc_preprocessor=use_doc_preprocessor,
             use_layout_detection=use_layout_detection,
@@ -261,6 +267,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             merge_layout_blocks=merge_layout_blocks,
             use_layout_angle=use_layout_angle,
             markdown_ignore_labels=markdown_ignore_labels,
+            use_xycut=use_xycut,
         )
 
     def check_model_settings_valid(self, input_params: dict) -> bool:
@@ -448,6 +455,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_det_res = filter_overlap_boxes(
             layout_det_res, layout_prep_cfg["layout_shape_mode"]
         )
+        use_xycut = layout_prep_cfg["use_xycut"]
+        if use_xycut:
+            layout_det_res["boxes"] = xycut_sort(layout_det_res["boxes"])
         boxes = layout_det_res["boxes"]
         blocks_for_img = self.crop_by_boxes(
             image,
@@ -574,12 +584,16 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
     @benchmark.timeit_with_options(name="paddleocr_vl_run_vl_recognition_batches")
     def _paddleocr_vl_run_vl_recognition_batches(
-        self, batch_dict_by_pixel, has_spotting, vlm_kwargs
+        self, batch_dict_by_pixel, has_spotting, vlm_kwargs, layout_prep_cfg
     ):
         if vlm_kwargs is None:
             vlm_kwargs = {}
         elif vlm_kwargs.get("max_new_tokens", None) is None:
             vlm_kwargs["max_new_tokens"] = 4096
+
+        table_post_process = layout_prep_cfg["table_post_process"]
+        if not table_post_process:
+            vlm_kwargs["max_new_tokens"] = 16000
 
         # MonkeyOCR-pro-3B 的服务端 Qwen2.5-VL 处理器已内置 size 配置，
         # 若再通过 mm_processor_kwargs 下发 min_pixels/max_pixels，会与其
@@ -592,6 +606,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
             min_px, max_px = pixel_key[0], pixel_key[1]
             kwargs = {
                 "use_cache": True,
+                "min_pixels": min_px,
+                "max_pixels": max_px,
+                "use_layout_detection": layout_prep_cfg["use_layout_detection"],
                 **vlm_kwargs,
             }
             if forward_pixels:
@@ -623,12 +640,15 @@ class _PaddleOCRVLPipeline(BasePipeline):
         id2pixel_key_map,
         drop_figures_set,
         vis_image_labels,
+        layout_prep_cfg,
     ):
         parsing_res_lists = []
         table_res_lists = []
         spotting_res_list = []
         image_path_to_obj_map = {}
         table_blocks = []
+        use_layout_detection = layout_prep_cfg["use_layout_detection"]
+        table_post_process = layout_prep_cfg["table_post_process"]
         for i, blocks_for_img in enumerate(blocks):
             parsing_res_list = []
             table_res_list = []
@@ -658,22 +678,33 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     if result_str is None:
                         result_str = ""
                     min_count = 5000 if block_label == "table" else 50
-                    result_str = truncate_repetitive_content(
-                        result_str, min_count=min_count
-                    )
-                    if ("\\(" in result_str and "\\)" in result_str) or (
-                        "\\[" in result_str and "\\]" in result_str
-                    ):
-                        result_str = result_str.replace("$", "")
-
-                        result_str = (
-                            result_str.replace("\\(", " $ ")
-                            .replace("\\)", " $")
-                            .replace("\\[\\[", "\\[")
-                            .replace("\\]\\]", "\\]")
-                            .replace("\\[", " $$ ")
-                            .replace("\\]", " $$ ")
+                    if use_layout_detection:
+                        result_str = truncate_repetitive_content(
+                            result_str, min_count=min_count
                         )
+                    if (
+                        ("\\(" in result_str and "\\)" in result_str)
+                        or ("\\[" in result_str and "\\]" in result_str)
+                    ) and table_post_process == True:
+                        result_str = result_str.replace("$", "")
+                        if block_label == "table" and use_layout_detection == False:
+                            result_str = (
+                                result_str.replace("\\(", "$")
+                                .replace("\\)", "$")
+                                .replace("\\[\\[", "\\[")
+                                .replace("\\]\\]", "\\]")
+                                .replace("\\[", "$$")
+                                .replace("\\]", "$$")
+                            )
+                        else:
+                            result_str = (
+                                result_str.replace("\\(", " $ ")
+                                .replace("\\)", " $")
+                                .replace("\\[\\[", "\\[")
+                                .replace("\\]\\]", "\\]")
+                                .replace("\\[", " $$ ")
+                                .replace("\\]", " $$ ")
+                            )
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
                     if (
@@ -683,6 +714,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         if not result_str.startswith(" $$"):
                             result_str = " $$ " + result_str + " $$ "
                     if block_label == "table":
+                        escape = True if use_layout_detection == True else False
+                        html_str = convert_otsl_to_html(result_str, escape=escape)
                         html_str = ""
                         if self.vl_rec_model.model_name == "MinerU2.5":
                             html_str = block_content_to_html(result_str)
@@ -754,9 +787,12 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_chart_recognition=False,
         use_seal_recognition=False,
         use_ocr_for_image_block=False,
+        use_layout_detection=False,
         vlm_kwargs=None,
         merge_layout_blocks=True,
         layout_shape_mode="auto",
+        use_xycut=False,
+        table_post_process=False,
         use_layout_angle=False,
         layout_angle_conf_thresh=0.9,
     ):
@@ -804,6 +840,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
             "formula_max_pixels": formula_max_pixels,
             "seal_min_pixels": seal_min_pixels,
             "seal_max_pixels": seal_max_pixels,
+            "use_xycut": use_xycut,
+            "table_post_process": table_post_process,
+            "use_layout_detection": use_layout_detection,
         }
 
         num_pages = len(images)
@@ -846,7 +885,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         del images, layout_det_results, page_results
 
         self._paddleocr_vl_run_vl_recognition_batches(
-            batch_dict_by_pixel, has_spotting, vlm_kwargs
+            batch_dict_by_pixel, has_spotting, vlm_kwargs, layout_prep_cfg
         )
 
         (
@@ -859,6 +898,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             id2pixel_key_map,
             drop_figures_set,
             vis_image_labels,
+            layout_prep_cfg,
         )
 
         return (
@@ -894,8 +934,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
         max_pixels: Optional[int] = None,
         max_new_tokens: Optional[int] = None,
         merge_layout_blocks: Optional[bool] = None,
-        markdown_ignore_labels: Optional[List[str]] = None,
+        markdown_ignore_labels: Optional[list[str]] = None,
         vlm_extra_args: Optional[dict] = None,
+        layout_gt_dir: Optional[str] = None,
+        use_xycut: Optional[bool] = False,
+        table_post_process: Optional[bool] = True,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -916,8 +959,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 If it's a single number, then both width and height are used.
                 If it's a tuple of two numbers, then they are used separately for width and height respectively.
                 If it's None, then no unclipping will be performed.
-            layout_merge_bboxes_mode (Optional[str], optional): The mode for merging bounding boxes. Defaults to `None`.
+            layout_merge_bboxes_mode (Optional[str], optional): The mode for merging bounding boxes. Defaults to None.
             layout_shape_mode (Optional[str], optional): The mode for layout shape. Defaults to "auto", [ "rect", "quad","poly", "auto"] are supported.
+            use_queues (Optional[bool], optional): Whether to use queues. Defaults to None.
+            prompt_label (Optional[Union[str, None]], optional): The label of the prompt in ['ocr', 'formula', 'table', 'chart']. Defaults to None.
             use_layout_angle (Optional[bool]): Whether to use the page rotation
                 predicted by the layout model to deskew / un-rotate the crops
                 handed to the recognition model. Requires a layout model that
@@ -952,6 +997,12 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_ocr_for_image_block,
             format_block_content,
             merge_layout_blocks,
+            markdown_ignore_labels,
+            use_xycut,
+        )
+
+        model_settings["return_layout_polygon_points"] = (
+            False if layout_shape_mode == "rect" else True
             use_layout_angle=use_layout_angle,
             markdown_ignore_labels=markdown_ignore_labels,
         )
@@ -1012,19 +1063,77 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 doc_preprocessor_images = [
                     item["output_img"] for item in doc_preprocessor_results
                 ]
-                if model_settings["use_layout_detection"]:
-                    layout_det_results = list(
-                        self.layout_det_model(
-                            doc_preprocessor_images,
-                            threshold=layout_threshold,
-                            layout_nms=layout_nms,
-                            layout_unclip_ratio=layout_unclip_ratio,
-                            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
-                            layout_shape_mode=layout_shape_mode,
-                            filter_overlap_boxes=False,
-                        )
-                    )
+                if layout_gt_dir:
+                    import json
+                    import os
 
+                    from ...models.object_detection.result import DetResult
+
+                    layout_det_results = []
+                    model_settings["use_layout_gt"] = True
+
+                    for idx, image in enumerate(doc_preprocessor_images):
+                        input = batch_data.instances[idx]
+                        doc_preprocessor_image = image
+                        label_dir = layout_gt_dir
+                        notes_path = f"{label_dir}/notes.json"
+                        labels = f"{label_dir}/labels"
+                        gt_file = os.path.basename(input).rsplit(".", 1)[0] + ".txt"
+                        gt_path = f"{labels}/{gt_file}"
+                        with open(notes_path, "r") as f:
+                            notes = json.load(f)
+                        categories_map = {}
+                        for categories in notes["categories"]:
+                            id = int(categories["id"])
+                            name = categories["name"]
+                            categories_map[id] = name
+                        with open(gt_path, "r") as f:
+                            lines = f.readlines()
+                        layout_det_res_dic = {
+                            "input_img": doc_preprocessor_image,
+                            "page_index": None,
+                            "boxes": [],
+                        }
+                        for idx, line in enumerate(lines):
+                            line = line.strip().split(" ")
+                            category_id = int(line[0])
+                            label = categories_map[category_id]
+                            img_h, img_w = doc_preprocessor_image.shape[:2]
+                            center_x = float(line[1]) * img_w
+                            center_y = float(line[2]) * img_h
+                            w = float(line[3]) * img_w
+                            h = float(line[4]) * img_h
+                            x0 = center_x - w / 2
+                            y0 = center_y - h / 2
+                            x1 = center_x + w / 2
+                            y1 = center_y + h / 2
+                            x0 = max(0, int(x0))
+                            y0 = max(0, int(y0))
+                            x1 = min(img_w, int(x1))
+                            y1 = min(img_h, int(y1))
+                            x_min = min(x0, x1)
+                            y_min = min(y0, y1)
+                            x_max = max(x0, x1)
+                            y_max = max(y0, y1)
+                            if (
+                                x_min >= img_w
+                                or y_min >= img_h
+                                or x_max <= 0
+                                or y_max <= 0
+                            ):
+                                continue
+                            box = [x_min, y_min, x_max, y_max]
+                            layout_det_res_dic["boxes"].append(
+                                {
+                                    "cls_id": category_id,
+                                    "label": label,
+                                    "coordinate": box,
+                                    "score": 1.0,
+                                    "order": idx,
+                                }
+                            )
+                        layout_det_res = DetResult(layout_det_res_dic)
+                        layout_det_results.append(layout_det_res)
                     imgs_in_doc = [
                         gather_imgs(doc_pp_img, layout_det_res["boxes"])
                         for doc_pp_img, layout_det_res in zip(
@@ -1032,28 +1141,48 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
                     ]
                 else:
-                    layout_det_results = []
-                    for doc_preprocessor_image in doc_preprocessor_images:
-                        layout_det_results.append(
-                            {
-                                "input_path": None,
-                                "page_index": None,
-                                "boxes": [
-                                    {
-                                        "cls_id": 0,
-                                        "label": prompt_label.lower(),
-                                        "score": 1,
-                                        "coordinate": [
-                                            0,
-                                            0,
-                                            doc_preprocessor_image.shape[1],
-                                            doc_preprocessor_image.shape[0],
-                                        ],
-                                    }
-                                ],
-                            }
+                    if model_settings["use_layout_detection"]:
+                        layout_det_results = list(
+                            self.layout_det_model(
+                                doc_preprocessor_images,
+                                threshold=layout_threshold,
+                                layout_nms=layout_nms,
+                                layout_unclip_ratio=layout_unclip_ratio,
+                                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+                                layout_shape_mode=layout_shape_mode,
+                                filter_overlap_boxes=False,
+                            )
                         )
-                    imgs_in_doc = [[] for _ in layout_det_results]
+
+                        imgs_in_doc = [
+                            gather_imgs(doc_pp_img, layout_det_res["boxes"])
+                            for doc_pp_img, layout_det_res in zip(
+                                doc_preprocessor_images, layout_det_results
+                            )
+                        ]
+                    else:
+                        layout_det_results = []
+                        for doc_preprocessor_image in doc_preprocessor_images:
+                            layout_det_results.append(
+                                {
+                                    "input_path": None,
+                                    "page_index": None,
+                                    "boxes": [
+                                        {
+                                            "cls_id": 0,
+                                            "label": prompt_label.lower(),
+                                            "score": 1,
+                                            "coordinate": [
+                                                0,
+                                                0,
+                                                doc_preprocessor_image.shape[1],
+                                                doc_preprocessor_image.shape[0],
+                                            ],
+                                        }
+                                    ],
+                                }
+                            )
+                        imgs_in_doc = [[] for _ in layout_det_results]
 
                 yield input_paths, page_indexes, page_counts, doc_preprocessor_images, doc_preprocessor_results, layout_det_results, imgs_in_doc
 
@@ -1080,6 +1209,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 use_chart_recognition=model_settings["use_chart_recognition"],
                 use_seal_recognition=model_settings["use_seal_recognition"],
                 use_ocr_for_image_block=model_settings["use_ocr_for_image_block"],
+                use_layout_detection=model_settings["use_layout_detection"],
                 vlm_kwargs={
                     "repetition_penalty": repetition_penalty,
                     "temperature": temperature,
@@ -1091,6 +1221,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 },
                 merge_layout_blocks=model_settings["merge_layout_blocks"],
                 layout_shape_mode=layout_shape_mode,
+                use_xycut=model_settings["use_xycut"],
+                table_post_process=table_post_process,
                 use_layout_angle=model_settings["use_layout_angle"],
                 layout_angle_conf_thresh=layout_angle_conf_thresh,
             )
