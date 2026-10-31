@@ -18,6 +18,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from itertools import chain
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -34,12 +35,17 @@ from ...utils.xycut import xycut_sort
 from .._parallel import AutoParallelImageSimpleInferencePipeline
 from ..base import BasePipeline
 from ..components import CropByBoxes
+from ..components.common.page_rectify import (
+    DEFAULT_CONF_THRESH,
+    DEFAULT_MIN_KEYSTONE,
+    DEFAULT_MIN_ROLL,
+    DEFAULT_MIN_SHEAR,
+    plan_page_correction,
+)
 from ..layout_parsing.merge_table import merge_tables_across_pages
 from ..layout_parsing.title_level import assign_levels_to_parsing_res
 from ..layout_parsing.utils import construct_img_path, gather_imgs
 from .result import BaseResult, PaddleOCRVLBlock, PaddleOCRVLResult
-
-from .mineru_utils import block_content_to_html
 
 from .uilts import (
     convert_otsl_to_html,
@@ -55,6 +61,33 @@ from .uilts import (
 )
 
 IMAGE_LABELS = ["image", "header_image", "footer_image"]
+
+
+def _is_uniform_image(image):
+    """Only discard truly uniform pages; preserve even one-level contrast."""
+    return bool(image.size and np.all(image == image[0, 0]))
+
+
+@lru_cache(maxsize=1)
+def _load_mineru_block_content_to_html():
+    """Resolve MinerU2.5's table converter lazily.
+    ``mineru_utils`` is an optional module: it is not always present in the
+    tree, and importing it at module scope breaks ``import paddlex`` outright
+    (``pipelines/__init__.py`` eagerly imports this package). Returning ``None``
+    when it is missing lets MinerU2.5 fall back to the shared OTSL converter
+    instead of taking the whole library down.
+    """
+    try:
+        from .mineru_utils import block_content_to_html
+    except ImportError:
+        logging.warning(
+            "MinerU2.5 table post-processing is unavailable: "
+            "paddlex.inference.pipelines.paddleocr_vl.mineru_utils could not be "
+            "imported. Falling back to the OTSL-to-HTML converter, which may "
+            "produce different table markup for this model."
+        )
+        return None
+    return block_content_to_html
 
 
 @benchmark.time_methods
@@ -119,10 +152,14 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     {"model_config_error": "config error for layout_det_model!"},
                 )
                 model_name = layout_det_config.get("model_name", None)
-                # assert model_name is not None and model_name in [
-                #     "PP-DocLayoutV2",
-                #     "PP-DocLayoutV3",
-                # ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
+                supported_layout_models = [
+                    "PP-DocLayoutV2",
+                    "PP-DocLayoutV3",
+                    "PP-DocLayoutV4",
+                ]
+                assert (
+                    model_name is not None and model_name in supported_layout_models
+                ), f"model_name must be one of {supported_layout_models}"
                 layout_kwargs = {}
                 if (threshold := layout_det_config.get("threshold", None)) is not None:
                     layout_kwargs["threshold"] = threshold
@@ -167,9 +204,22 @@ class _PaddleOCRVLPipeline(BasePipeline):
             self.use_queues = config.get("use_queues", False)
             self.merge_layout_blocks = config.get("merge_layout_blocks", True)
             # Off by default: it needs a layout model that predicts the page
-            # rotation, and on an upright page the correction only costs a
-            # resampling step.
-            self.use_layout_angle = config.get("use_layout_angle", False)
+            # deformation (`warp_params`), and on an undeformed page the
+            # correction only costs a resampling step.
+            self.use_layout_deform = config.get("use_layout_deform", False)
+            self.layout_deform_conf_thresh = config.get(
+                "layout_deform_conf_thresh", DEFAULT_CONF_THRESH
+            )
+            # Gate for the fine deformation, in degrees (see plan_page_correction).
+            self.layout_deform_min_roll = config.get(
+                "layout_deform_min_roll", DEFAULT_MIN_ROLL
+            )
+            self.layout_deform_min_shear = config.get(
+                "layout_deform_min_shear", DEFAULT_MIN_SHEAR
+            )
+            self.layout_deform_min_keystone = config.get(
+                "layout_deform_min_keystone", DEFAULT_MIN_KEYSTONE
+            )
             self.markdown_ignore_labels = config.get(
                 "markdown_ignore_labels",
                 [
@@ -206,9 +256,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_ocr_for_image_block: Union[bool, None],
         format_block_content: Union[bool, None],
         merge_layout_blocks: Union[bool, None],
-        markdown_ignore_labels: Optional[list[str]] = None,
         use_xycut: Union[bool, None] = None,
-        use_layout_angle: Union[bool, None] = None,
+        use_layout_deform: Union[bool, None] = None,
         markdown_ignore_labels: Optional[List[str]] = None,
     ) -> dict:
         """
@@ -248,8 +297,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         if merge_layout_blocks is None:
             merge_layout_blocks = self.merge_layout_blocks
 
-        if use_layout_angle is None:
-            use_layout_angle = self.use_layout_angle
+        if use_layout_deform is None:
+            use_layout_deform = self.use_layout_deform
 
         if markdown_ignore_labels is None:
             markdown_ignore_labels = self.markdown_ignore_labels
@@ -265,7 +314,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_ocr_for_image_block=use_ocr_for_image_block,
             format_block_content=format_block_content,
             merge_layout_blocks=merge_layout_blocks,
-            use_layout_angle=use_layout_angle,
+            use_layout_deform=use_layout_deform,
             markdown_ignore_labels=markdown_ignore_labels,
             use_xycut=use_xycut,
         )
@@ -295,31 +344,45 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
     @benchmark.timeit_with_options(name="paddleocr_vl_crop_layout_regions")
     def _paddleocr_vl_crop_layout_regions(
-        self, image, boxes, layout_shape_mode, page_angle=None
+        self, image, boxes, layout_shape_mode, correction=None
     ):
         return self.crop_by_boxes(
-            image, boxes, layout_shape_mode, page_angle=page_angle
+            image, boxes, layout_shape_mode, **self._crop_kwargs(correction)
         )
 
     @staticmethod
-    def _page_angle_for_crop(layout_det_res, layout_prep_cfg):
-        """Page rotation to hand the cropper, or None to keep the plain crop.
+    def _page_correction_for_crop(image, layout_det_res, layout_prep_cfg):
+        """How the cropper should correct this page, or None for plain crops.
 
-        None whenever the correction is switched off or the layout model does not
-        predict an angle, so a model without the extra output behaves exactly as
-        before.  Low-confidence quadrants are dropped rather than trusted: a
-        wrong quarter turn is far more damaging to recognition than no correction
-        at all.
+        None when the correction is switched off or the layout model predicts no
+        `warp_params`; otherwise `plan_page_correction` decides between the full
+        rectification, a bare quarter turn and nothing, from the quadrant
+        confidence and the three fine-deformation thresholds.  Built on `image`
+        -- the very image the layout model was run on, whose square-squashed
+        version the parameters describe.
         """
-        if not layout_prep_cfg.get("use_layout_angle"):
+        if not layout_prep_cfg["use_layout_deform"]:
             return None
-        angle = layout_det_res.get("page_angle")
-        if angle is None:
+        warp_params = layout_det_res.get("warp_params")
+        if warp_params is None:
             return None
-        conf = layout_det_res.get("page_angle_conf")
-        if conf is not None and conf < layout_prep_cfg["layout_angle_conf_thresh"]:
-            return None
-        return angle
+        return plan_page_correction(
+            image.shape,
+            warp_params,
+            conf_thresh=layout_prep_cfg["layout_deform_conf_thresh"],
+            min_roll=layout_prep_cfg["layout_deform_min_roll"],
+            min_shear=layout_prep_cfg["layout_deform_min_shear"],
+            min_keystone=layout_prep_cfg["layout_deform_min_keystone"],
+        )
+
+    @staticmethod
+    def _crop_kwargs(correction):
+        if correction is None:
+            return {}
+        return {
+            "page_homography": correction.homography,
+            "rot90_k": correction.rot90_k,
+        }
 
     @benchmark.timeit_with_options(name="paddleocr_vl_merge_adjacent_blocks")
     def _paddleocr_vl_merge_adjacent_blocks(self, blocks_for_img, layout_prep_cfg):
@@ -369,7 +432,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             text_prompt = "This is the image of a table. Please output the table in html format."
                     block_img, figure_token_map, drop_figures = (
                         tokenize_figure_of_table(
-                            block_img, block["box"], imgs_in_doc_for_img
+                            block_img, block["box"], imgs_in_doc_for_img,
+                            crop_matrix=block.get("crop_matrix"),
                         )
                     )
                     blk_min_pixels = layout_prep_cfg["table_min_pixels"]
@@ -451,7 +515,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
     def _paddleocr_vl_prepare_page_core(self, payload):
         """Filter → crop → merge → build VLM inputs (safe for thread pool; no nested timers)."""
         i, image, layout_det_res, imgs_in_doc_for_img, layout_prep_cfg = payload
-        page_angle = self._page_angle_for_crop(layout_det_res, layout_prep_cfg)
+        correction = self._page_correction_for_crop(
+            image, layout_det_res, layout_prep_cfg
+        )
         layout_det_res = filter_overlap_boxes(
             layout_det_res, layout_prep_cfg["layout_shape_mode"]
         )
@@ -463,7 +529,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             image,
             boxes,
             layout_prep_cfg["layout_shape_mode"],
-            page_angle=page_angle,
+            **self._crop_kwargs(correction),
         )
         if layout_prep_cfg["merge_layout_blocks"]:
             blocks_for_img = merge_blocks(
@@ -493,7 +559,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
             imgs_in_doc_for_img,
             layout_prep_cfg,
         ) = payload
-        page_angle = self._page_angle_for_crop(layout_det_res, layout_prep_cfg)
+        correction = self._page_correction_for_crop(
+            image, layout_det_res, layout_prep_cfg
+        )
         layout_det_res = self._paddleocr_vl_filter_overlap_boxes(
             layout_det_res, layout_prep_cfg["layout_shape_mode"]
         )
@@ -502,7 +570,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             image,
             boxes,
             layout_prep_cfg["layout_shape_mode"],
-            page_angle=page_angle,
+            correction=correction,
         )
         blocks_for_img = self._paddleocr_vl_merge_adjacent_blocks(
             blocks_for_img, layout_prep_cfg
@@ -715,17 +783,22 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             result_str = " $$ " + result_str + " $$ "
                     if block_label == "table":
                         escape = True if use_layout_detection == True else False
-                        html_str = convert_otsl_to_html(result_str, escape=escape)
-                        html_str = ""
-                        if self.vl_rec_model.model_name == "MinerU2.5":
-                            html_str = block_content_to_html(result_str)
+                        mineru_to_html = (
+                            _load_mineru_block_content_to_html()
+                            if self.vl_rec_model.model_name == "MinerU2.5"
+                            else None
+                        )
+                        if mineru_to_html is not None:
+                            html_str = mineru_to_html(result_str)
                         elif self.vl_rec_model.model_name in [
                             "Dolphinv2",
                             "MonkeyOCR-pro-3B",
                         ]:
                             html_str = result_str
                         else:
-                            html_str = convert_otsl_to_html(result_str)
+                            html_str = convert_otsl_to_html(
+                                result_str, escape=escape
+                            )
                         if html_str != "":
                             result_str = html_str
                     if block_label == "spotting":
@@ -793,8 +866,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_shape_mode="auto",
         use_xycut=False,
         table_post_process=False,
-        use_layout_angle=False,
-        layout_angle_conf_thresh=0.9,
+        use_layout_deform=False,
+        layout_deform_conf_thresh=DEFAULT_CONF_THRESH,
+        layout_deform_min_roll=DEFAULT_MIN_ROLL,
+        layout_deform_min_shear=DEFAULT_MIN_SHEAR,
+        layout_deform_min_keystone=DEFAULT_MIN_KEYSTONE,
     ):
         if vlm_kwargs is None:
             vlm_kwargs = {}
@@ -825,8 +901,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_prep_cfg = {
             "layout_shape_mode": layout_shape_mode,
             "merge_layout_blocks": merge_layout_blocks,
-            "use_layout_angle": use_layout_angle,
-            "layout_angle_conf_thresh": layout_angle_conf_thresh,
+            "use_layout_deform": use_layout_deform,
+            "layout_deform_conf_thresh": layout_deform_conf_thresh,
+            "layout_deform_min_roll": layout_deform_min_roll,
+            "layout_deform_min_shear": layout_deform_min_shear,
+            "layout_deform_min_keystone": layout_deform_min_keystone,
             "image_labels": image_labels,
             "use_chart_recognition": use_chart_recognition,
             "use_seal_recognition": use_seal_recognition,
@@ -922,8 +1001,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
         layout_shape_mode: Optional[str] = "auto",
-        use_layout_angle: Optional[bool] = None,
-        layout_angle_conf_thresh: float = 0.9,
+        use_layout_deform: Optional[bool] = None,
+        layout_deform_conf_thresh: Optional[float] = None,
+        layout_deform_min_roll: Optional[float] = None,
+        layout_deform_min_shear: Optional[float] = None,
+        layout_deform_min_keystone: Optional[float] = None,
         use_queues: Optional[bool] = None,
         prompt_label: Optional[Union[str, None]] = None,
         format_block_content: Union[bool, None] = None,
@@ -961,17 +1043,26 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 If it's None, then no unclipping will be performed.
             layout_merge_bboxes_mode (Optional[str], optional): The mode for merging bounding boxes. Defaults to None.
             layout_shape_mode (Optional[str], optional): The mode for layout shape. Defaults to "auto", [ "rect", "quad","poly", "auto"] are supported.
-            use_queues (Optional[bool], optional): Whether to use queues. Defaults to None.
-            prompt_label (Optional[Union[str, None]], optional): The label of the prompt in ['ocr', 'formula', 'table', 'chart']. Defaults to None.
-            use_layout_angle (Optional[bool]): Whether to use the page rotation
-                predicted by the layout model to deskew / un-rotate the crops
-                handed to the recognition model. Requires a layout model that
-                emits the angle; has no effect otherwise. Default is None, which
-                falls back to the pipeline config (off unless set there).
-            layout_angle_conf_thresh (float): Minimum quadrant confidence for the
-                predicted angle to be applied. Below it the plain crop is kept,
-                because a wrong quarter turn hurts recognition more than no
+            use_layout_deform (Optional[bool]): Whether to rectify each crop handed
+                to the recognition model with the page deformation the layout
+                model predicts (`warp_params`: roll, shear, keystone). Requires a
+                layout model that emits it; has no effect otherwise. Default is
+                None, which falls back to the pipeline config (off unless set).
+            layout_deform_conf_thresh (Optional[float]): Minimum quadrant confidence for the
+                predicted deformation to be applied. None uses the pipeline config.
+                Below it the plain crop is
+                kept, because a wrong quarter turn hurts recognition more than no
                 correction. Defaults to 0.9.
+            layout_deform_min_roll, layout_deform_min_shear,
+            layout_deform_min_keystone (Optional[float]): The fine deformation
+                (roll left after taking out whole quarter turns, shear, and the
+                keystone expressed as the angle it turns the page border by) is
+                applied only when one of them reaches its threshold, in degrees;
+                then all four predicted values are applied together.  Otherwise a
+                page predicted as a quarter turn is only turned, exactly and
+                without interpolation, and any other page keeps the plain crop.
+                None falls back to the pipeline config (2.0 each unless set);
+                `float("inf")` for all three leaves quarter turns only.
             use_queues (Optional[bool], optional): Whether to use queues. Defaults to `None`.
             prompt_label (Optional[Union[str, None]], optional): The label of the prompt in ['ocr', 'formula', 'table', 'chart']. Defaults to `None`.
             format_block_content (Optional[bool]): Whether to format the block content. Default is None.
@@ -997,13 +1088,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_ocr_for_image_block,
             format_block_content,
             merge_layout_blocks,
-            markdown_ignore_labels,
-            use_xycut,
-        )
-
-        model_settings["return_layout_polygon_points"] = (
-            False if layout_shape_mode == "rect" else True
-            use_layout_angle=use_layout_angle,
+            use_xycut=use_xycut,
+            use_layout_deform=use_layout_deform,
             markdown_ignore_labels=markdown_ignore_labels,
         )
 
@@ -1184,6 +1270,16 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             )
                         imgs_in_doc = [[] for _ in layout_det_results]
 
+                # Uniform pages cannot contain text. Layout false positives on
+                # them otherwise send empty crops to the VLM, which may hallucinate.
+                # Use exact equality so faint text is never removed by a threshold.
+                for image, layout_res, page_images in zip(
+                    doc_preprocessor_images, layout_det_results, imgs_in_doc
+                ):
+                    if _is_uniform_image(image):
+                        layout_res["boxes"] = []
+                        page_images.clear()
+
                 yield input_paths, page_indexes, page_counts, doc_preprocessor_images, doc_preprocessor_results, layout_det_results, imgs_in_doc
 
         def _process_vlm(results_cv):
@@ -1223,8 +1319,27 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 layout_shape_mode=layout_shape_mode,
                 use_xycut=model_settings["use_xycut"],
                 table_post_process=table_post_process,
-                use_layout_angle=model_settings["use_layout_angle"],
-                layout_angle_conf_thresh=layout_angle_conf_thresh,
+                use_layout_deform=model_settings["use_layout_deform"],
+                layout_deform_conf_thresh=(
+                    self.layout_deform_conf_thresh
+                    if layout_deform_conf_thresh is None
+                    else layout_deform_conf_thresh
+                ),
+                layout_deform_min_roll=(
+                    self.layout_deform_min_roll
+                    if layout_deform_min_roll is None
+                    else layout_deform_min_roll
+                ),
+                layout_deform_min_shear=(
+                    self.layout_deform_min_shear
+                    if layout_deform_min_shear is None
+                    else layout_deform_min_shear
+                ),
+                layout_deform_min_keystone=(
+                    self.layout_deform_min_keystone
+                    if layout_deform_min_keystone is None
+                    else layout_deform_min_keystone
+                ),
             )
 
             for (
@@ -1625,3 +1740,7 @@ class PaddleOCRVL15Pipeline(_BasePaddleOCRVLPipeline):
 @pipeline_requires_extra("ocr")
 class PaddleOCRVL16Pipeline(_BasePaddleOCRVLPipeline):
     entities = "PaddleOCR-VL-1.6"
+
+@pipeline_requires_extra("ocr")
+class PaddleOCRVL18Pipeline(_BasePaddleOCRVLPipeline):
+    entities = "PaddleOCR-VL-1.8"

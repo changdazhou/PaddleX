@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# from typing import Any, List, Optional, Tuple, Union
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -24,7 +23,11 @@ from .processors import LayoutAnalysisProcess
 from .result import LayoutAnalysisResult
 from .utils import STATIC_SHAPE_MODEL_LIST
 
-LAYOUT_ANALYSIS_TRANSFORMERS_MODELS = ["PP-DocLayoutV2", "PP-DocLayoutV3"]
+LAYOUT_ANALYSIS_TRANSFORMERS_MODELS = [
+    "PP-DocLayoutV2",
+    "PP-DocLayoutV3",
+    "PP-DocLayoutV4",
+]
 
 
 class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
@@ -73,189 +76,85 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         Transform batch outputs into a list of single image output.
 
         Args:
-            pred (Sequence[Any]): The input predictions, which can be either a list of 3 or 4 elements.
-                - When len(pred) == 6 and pred[2] is 3-D, it is expected to be in the format [bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits],
-                  compatible with Modeling_V2 output.
-                - When len(pred) == 5, it is expected to be in the format [bbox_pred, bbox_num, qi, rel_logits, roor_logits],
-                  compatible with DocLayoutV2 (no mask) output.
-                - When len(pred) == 6 and pred[2] is 2-D, it is the same as the
-                  5-output case plus a trailing page-rotation tensor of shape
-                  [batch, 2] holding (angle in degrees, quadrant confidence).
-                - When len(pred) == 3, it is expected to be in the format [boxes, box_nums, masks],
-                  compatible with Instance Segmentation output.
-                - Otherwise it is treated as plain detection output [bbox_pred, bbox_num].
-                  In this case bbox_pred may have 6 columns (2-point box) or 10 columns
-                  (4-point / quad box); the quad is detected by column count and extracted
-                  automatically when present, so both models stay compatible.
+            pred (Sequence[Any]): The model outputs. PP-DocLayoutV4 returns
+                [bbox_pred, bbox_num, qi, rel_logits, roor_logits], where each row of
+                bbox_pred is [label, score, x1, y1, x2, y2, x3, y3, x4, y4] and qi
+                holds the query index of each row. Models that predict the page
+                deformation append warp_params [batch, 5] = (roll_deg,
+                quadrant_conf, shear_deg, kx, ky). Models that also predict
+                masks return [bbox_pred, bbox_num, masks, qi, rel_logits,
+                roor_logits], where masks is [N, H, W]. In every layout, the
+                rows of bbox_pred may instead be [label, score, xmin, ymin,
+                xmax, ymax], which carry no quad. The outputs of the other
+                models are handled by ``DetRunnerPredictor``.
 
         Returns:
-            List[dict]: A list of dictionaries, each containing either 'class_id' and 'masks' (for SOLOv2),
-                or 'boxes' and 'masks' (for Instance Segmentation), or just 'boxes' if no masks are provided.
+            List[dict]: A list of dictionaries, one per image.
         """
-        box_idx_start = 0
-        pred_box = []
-
-        # DocLayoutV3 V2: 6 outputs (bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits)
-        # `pred[2].ndim == 3` separates this from the maskless + angle model
-        # below, which also has 6 outputs but carries `qi` ([B, K], 2-D) in that
-        # slot instead of a mask batch ([N, H, W], 3-D).
+        masks = None
+        warp_params = None
+        # The 3-D mask batch tells this layout from V4 with warp_params, whose
+        # third output is the 2-D qi.
         if len(pred) == 6 and pred[2].ndim == 3:
-            bbox_pred, bbox_num, mask_pred, qi, rel_logits, roor_logits = pred
-
-            # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
-            quad_all = None
-            if bbox_pred.shape[1] == 10:
-                quad_all = bbox_pred[:, 2:10].copy()  # [B*K, 8]
-                xs = quad_all[:, 0::2]  # x1, x2, x3, x4
-                ys = quad_all[:, 1::2]  # y1, y2, y3, y4
-                bbox_pred = np.column_stack(
-                    [
-                        bbox_pred[:, 0],
-                        bbox_pred[:, 1],
-                        xs.min(axis=1),
-                        ys.min(axis=1),
-                        xs.max(axis=1),
-                        ys.max(axis=1),
-                    ]
-                )
-
-            results = []
-            box_idx_start = 0
-            for idx in range(len(bbox_num)):
-                K = int(bbox_num[idx])
-                box_idx_end = box_idx_start + K
-                result_dict = {
-                    "boxes": bbox_pred[box_idx_start:box_idx_end],
-                    "masks": mask_pred[box_idx_start:box_idx_end],
-                    "rel_logits": rel_logits[idx],
-                    "roor_logits": roor_logits[idx],
-                    "qi": qi[idx, :K],
-                }
-                if quad_all is not None:
-                    result_dict["quad"] = quad_all[box_idx_start:box_idx_end]
-                else:
-                    result_dict["quad"] = None
-                results.append(result_dict)
-                box_idx_start = box_idx_end
-            return results
-
-        # DocLayoutV2 without mask: 5 outputs (bbox_pred, bbox_num, qi, rel_logits, roor_logits),
-        # or 6 when the model also predicts the page rotation, which arrives as a
-        # trailing [B, 2] tensor of (angle in degrees, quadrant confidence).
-        if len(pred) == 5 or len(pred) == 6:
+            bbox_pred, bbox_num, masks, qi, rel_logits, roor_logits = pred
+        elif len(pred) in (5, 6):
             bbox_pred, bbox_num, qi, rel_logits, roor_logits = pred[:5]
-            angle = pred[5] if len(pred) == 6 else None
-            if angle is not None and (angle.ndim != 2 or angle.shape[1] != 2):
-                raise ValueError(
-                    f"Expected the 6th output to be the page rotation with shape "
-                    f"[batch, 2], got {angle.shape}."
-                )
-
-            # Detect 4-point model output (10 columns: label, score, x1,y1,x2,y2,x3,y3,x4,y4)
-            quad_all = None
-            if bbox_pred.shape[1] == 10:
-                quad_all = bbox_pred[:, 2:10].copy()  # [B*K, 8]
-                xs = quad_all[:, 0::2]
-                ys = quad_all[:, 1::2]
-                bbox_pred = np.column_stack(
-                    [
-                        bbox_pred[:, 0],
-                        bbox_pred[:, 1],
-                        xs.min(axis=1),
-                        ys.min(axis=1),
-                        xs.max(axis=1),
-                        ys.max(axis=1),
-                    ]
-                )
-
-            results = []
-            box_idx_start = 0
-            for idx in range(len(bbox_num)):
-                K = int(bbox_num[idx])
-                box_idx_end = box_idx_start + K
-                result_dict = {
-                    "boxes": bbox_pred[box_idx_start:box_idx_end],
-                    "rel_logits": rel_logits[idx],
-                    "roor_logits": roor_logits[idx],
-                    "qi": qi[idx, :K],
-                }
-                if quad_all is not None:
-                    result_dict["quad"] = quad_all[box_idx_start:box_idx_end]
-                else:
-                    result_dict["quad"] = None
-                if angle is not None:
-                    result_dict["page_angle"] = float(angle[idx, 0])
-                    result_dict["page_angle_conf"] = float(angle[idx, 1])
-                results.append(result_dict)
-                box_idx_start = box_idx_end
-            return results
-
-        if len(pred) == 3:
-            # Adapt to Instance Segmentation
-            pred_mask = []
-
-        # Detect 4-point (quad) box output by column count instead of by
-        # len(pred), so any plain-detection output remains compatible.
-        # Quad models put the 8 corner coords at columns 2:10. There may be
-        # trailing metadata columns after the quad (e.g. a pre-decoded
-        # reading-order column -> 11 cols); those are kept and appended after
-        # the 6-column AABB so the post-processor can sort by them
-        # (it recognizes 7-/8-column ordered-detection boxes).
-        bbox_all = pred[0]
-        quad_all = None
-        if (
-            len(pred) != 3
-            and hasattr(bbox_all, "ndim")
-            and bbox_all.ndim == 2
-            and bbox_all.shape[1] >= 10
-        ):
-            quad_all = bbox_all[:, 2:10].copy()  # [B*K, 8]
-            xs = quad_all[:, 0::2]  # x1, x2, x3, x4
-            ys = quad_all[:, 1::2]  # y1, y2, y3, y4
-            cols = [
-                bbox_all[:, 0],
-                bbox_all[:, 1],
-                xs.min(axis=1),
-                ys.min(axis=1),
-                xs.max(axis=1),
-                ys.max(axis=1),
-            ]
-            # Preserve any trailing columns (reading order, etc.) after the quad.
-            if bbox_all.shape[1] > 10:
-                cols.append(bbox_all[:, 10:])
-            bbox_all = np.column_stack(cols)
-
-        pred_quad = []
-        for idx in range(len(pred[1])):
-            np_boxes_num = pred[1][idx]
-            box_idx_end = box_idx_start + np_boxes_num
-            np_boxes = bbox_all[box_idx_start:box_idx_end]
-            pred_box.append(np_boxes)
-            if quad_all is not None:
-                pred_quad.append(quad_all[box_idx_start:box_idx_end])
-            if len(pred) == 3:
-                np_masks = pred[2][box_idx_start:box_idx_end]
-                pred_mask.append(np_masks)
-            box_idx_start = box_idx_end
-
-        if len(pred) == 3:
-            return [
-                {"boxes": np.asarray(pred_box[i]), "masks": np.asarray(pred_mask[i])}
-                for i in range(len(pred_box))
-            ]
-        elif quad_all is not None:
-            return [
-                {"boxes": np.array(pred_box[i]), "quad": pred_quad[i]}
-                for i in range(len(pred_box))
-            ]
+            if len(pred) == 6:
+                warp_params = pred[5]
         else:
-            return [{"boxes": np.array(res)} for res in pred_box]
+            return super()._format_output(pred)
+
+        if bbox_pred.ndim != 2 or bbox_pred.shape[1] not in (6, 10):
+            raise ValueError(
+                "Expected bbox_pred of shape [N, 6] or [N, 10], "
+                f"got {bbox_pred.shape}."
+            )
+        if warp_params is not None and warp_params.shape != (len(bbox_num), 5):
+            raise ValueError(
+                f"Expected warp_params of shape [batch, 5], got {warp_params.shape}."
+            )
+
+        quad = None
+        boxes = bbox_pred
+        if bbox_pred.shape[1] == 10:
+            # Detection uses the axis-aligned box of each quad.
+            quad = bbox_pred[:, 2:10]
+            xs, ys = quad[:, 0::2], quad[:, 1::2]
+            boxes = np.column_stack(
+                [
+                    bbox_pred[:, :2],
+                    xs.min(axis=1),
+                    ys.min(axis=1),
+                    xs.max(axis=1),
+                    ys.max(axis=1),
+                ]
+            )
+
+        results = []
+        box_idx_start = 0
+        for idx, num in enumerate(bbox_num):
+            box_idx_end = box_idx_start + int(num)
+            result = {
+                "boxes": boxes[box_idx_start:box_idx_end],
+                "qi": qi[idx, : int(num)],
+                "rel_logits": rel_logits[idx],
+                "roor_logits": roor_logits[idx],
+            }
+            if masks is not None:
+                result["masks"] = masks[box_idx_start:box_idx_end]
+            if quad is not None:
+                result["quad"] = quad[box_idx_start:box_idx_end]
+            if warp_params is not None:
+                result["warp_params"] = warp_params[idx].tolist()
+            results.append(result)
+            box_idx_start = box_idx_end
+        return results
 
     def process(
         self,
         batch_data: List[Any],
         threshold: Optional[Union[float, dict]] = None,
-        layout_nms: bool = False,
+        layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
         layout_shape_mode: Optional[str] = "auto",
@@ -297,7 +196,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
             preds_list,
             datas,
             threshold=threshold if threshold is not None else self.threshold,
-            layout_nms=layout_nms or self.layout_nms,
+            layout_nms=self.layout_nms if layout_nms is None else layout_nms,
             layout_unclip_ratio=layout_unclip_ratio or self.layout_unclip_ratio,
             layout_merge_bboxes_mode=layout_merge_bboxes_mode
             or self.layout_merge_bboxes_mode,
@@ -315,13 +214,9 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         # Image-level, so it never goes through the box post-processor.  Added
         # only for models that predict it, to leave every other model's result
         # (and its serialized JSON) unchanged.  `BasePredictor.apply` splits this
-        # dict of lists by index, so each single-image result ends up with its
-        # own scalar.
-        if any("page_angle" in pred for pred in preds_list):
-            result["page_angle"] = [pred.get("page_angle") for pred in preds_list]
-            result["page_angle_conf"] = [
-                pred.get("page_angle_conf") for pred in preds_list
-            ]
+        # dict of lists by index, so each single-image result gets its own row.
+        if any("warp_params" in pred for pred in preds_list):
+            result["warp_params"] = [pred.get("warp_params") for pred in preds_list]
         return result
 
     @DetRunnerPredictor.register("Resize")
@@ -343,6 +238,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         models_required_imgsize = [
             "PP-DocLayoutV2",
             "PP-DocLayoutV3",
+            "PP-DocLayoutV4",
         ]
         if any(name in self.model_name for name in models_required_imgsize):
             ordered_required_keys = (
@@ -358,7 +254,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
     def build_postprocess(self):
         if self.threshold is None:
             self.threshold = self.config.get("draw_threshold", 0.5)
-        if not self.layout_nms:
+        if self.layout_nms is None:
             self.layout_nms = self.config.get("layout_nms", None)
         if self.layout_unclip_ratio is None:
             self.layout_unclip_ratio = self.config.get("layout_unclip_ratio", None)
@@ -370,6 +266,17 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         return LayoutAnalysisProcess(
             labels=self.config["label_list"], scale_size=scale_size
         )
+
+
+def _polygon_to_rounded_box(polygon, box):
+    """Move a transformers polygon from its truncated box onto the rounded one."""
+    polygon = np.asarray(polygon, dtype=np.float64)
+    src, dst = np.trunc(box), np.round(box)
+    src_span = src[2:] - src[:2] - 1
+    scale = np.divide(
+        dst[2:] - dst[:2] - 1, src_span, out=np.ones(2), where=src_span > 0
+    )
+    return dst[:2] + (polygon - src[:2]) * scale
 
 
 class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
@@ -396,6 +303,17 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
                 return list(target_size)
         return [800, 800]
 
+    def preprocess_images(self, images, **kwargs):
+        if self.model_name == "PP-DocLayoutV4" and kwargs.get("do_resize", True):
+            # Match the Paddle engines exactly: tensor bicubic interpolation has
+            # different uint8 rounding, which changes the page geometry output.
+            resize = Resize(
+                target_size=self._resolve_scale_size()[::-1], interp="BICUBIC"
+            )
+            images = [Image.fromarray(resize.resize(np.asarray(im))) for im in images]
+            kwargs["do_resize"] = False
+        return super().preprocess_images(images, **kwargs)
+
     def _format_layout_transformers_output(self, prediction):
         formatted = self._format_transformers_output(prediction)
         if "order_seq" in prediction:
@@ -411,16 +329,40 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
 
         output = {"boxes": formatted}
         if "polygon_points" in prediction:
-            output["polygon_points"] = [
-                np.asarray(points) for points in prediction["polygon_points"]
-            ]
+            points = prediction["polygon_points"]
+            if self.model_name == "PP-DocLayoutV4":
+                # V4 predicts one quad [4, 2] per box, in original-image
+                # coordinates, like the Paddle engines.
+                points = points.detach().cpu().numpy()
+                if points.shape != (len(formatted), 4, 2):
+                    raise ValueError(
+                        f"Expected polygon_points of shape [{len(formatted)}, 4, 2], "
+                        f"got {points.shape}."
+                    )
+                output["quad"] = points.reshape(len(formatted), 8)
+            else:
+                if len(points) != len(formatted):
+                    raise ValueError(
+                        f"Expected {len(formatted)} polygon_points, got {len(points)}."
+                    )
+                output["polygon_points"] = [
+                    _polygon_to_rounded_box(polygon, box)
+                    for polygon, box in zip(points, formatted[:, 2:6])
+                ]
+        if "warp_params" in prediction:
+            warp_params = prediction["warp_params"].detach().cpu().numpy()
+            if warp_params.shape != (5,):
+                raise ValueError(
+                    f"Expected warp_params of shape [5], got {warp_params.shape}."
+                )
+            output["warp_params"] = warp_params.tolist()
         return output
 
     def process(
         self,
         batch_data: List[Any],
         threshold: Optional[Union[float, dict]] = None,
-        layout_nms: bool = False,
+        layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
         layout_shape_mode: Optional[str] = "auto",
@@ -449,7 +391,7 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
             batch_outputs,
             datas,
             threshold=effective_threshold,
-            layout_nms=layout_nms or self.layout_nms,
+            layout_nms=self.layout_nms if layout_nms is None else layout_nms,
             layout_unclip_ratio=layout_unclip_ratio or self.layout_unclip_ratio,
             layout_merge_bboxes_mode=layout_merge_bboxes_mode
             or self.layout_merge_bboxes_mode,
@@ -458,12 +400,17 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
             skip_order_labels=skip_order_labels,
         )
 
-        return {
+        result = {
             "input_path": batch_data.input_paths,
             "page_index": batch_data.page_indexes,
             "input_img": [data["ori_img"] for data in datas],
             "boxes": boxes,
         }
+        if any("warp_params" in output for output in batch_outputs):
+            result["warp_params"] = [
+                output.get("warp_params") for output in batch_outputs
+            ]
+        return result
 
     def postprocess(self, outputs, *, datas, threshold, **kwargs):
         predictions = self.image_processor.post_process_object_detection(
