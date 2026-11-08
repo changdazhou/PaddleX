@@ -3,7 +3,7 @@
 import inspect
 
 from paddlex.inference.pipelines.paddleocr_vl.pipeline import _PaddleOCRVLPipeline
-from paddlex.inference.pipelines.paddleocr_vl.uilts import convert_otsl_to_html
+from paddlex.inference.pipelines.paddleocr_vl.utils import convert_otsl_to_html
 
 
 def _bare_pipeline():

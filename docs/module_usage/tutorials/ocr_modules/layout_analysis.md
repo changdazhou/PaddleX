@@ -59,6 +59,17 @@ for res in output:
     res.save_to_json(save_path="./output/res.json")
 ```
 
+对 PP-DocLayoutV4，可在预测时传入 `layout_split_formula=True`，启用基于 OpenCV 的保守公式拆行：
+
+```python
+model = create_model(model_name="PP-DocLayoutV4")
+output = model.predict("document.png", layout_split_formula=True)
+```
+
+该参数默认为 `False`，不改变现有输出。开启后，对 `display_formula` 区域先校正四边形透视和局部光照，再结合连通域噪点过滤、分数线保护寻找水平留白，生成按阅读顺序排列的子框，并同步更新四边形和外接矩形。PaddleOCR-VL 产线的 `predict()` 也支持此参数，拆分发生在公式识别之前。PP-DocLayoutV4 开启此开关后，会优先尝试恢复包含过滤前的单行候选：候选分数须至少为 0.5、比父框高 0.05，并通过逐行对应、结构保护和至少 98% 的二值墨迹覆盖检查。不满足条件时继续使用图像拆行。恢复的候选保留自身检测分数，OpenCV 生成的子框继承父框分数；这些分数均不代表拆分置信度。
+
+此方法不依赖 OCR 或额外模型，适合行间留白明显的连续推导；密集公式、严重弯曲、跨行括号及不规则多边形可能保留整体框。它不能保证识别所有矩阵或分式结构，也不会修复原检测框已经裁掉的内容。建议先检查目标文档上的拆分结果，再评估端到端识别效果。
+
 <b>注：</b>PaddleX 支持多个模型托管平台，官方模型默认优先从 HuggingFace 下载。PaddleX 也支持通过环境变量 `PADDLE_PDX_MODEL_SOURCE` 设置优先使用的托管平台，目前支持 `huggingface`、`aistudio`、`bos`、`modelscope`，如优先使用 `bos`：`PADDLE_PDX_MODEL_SOURCE="bos"`；
 
 <details><summary>👉 <b>运行后，得到的结果为：（点击展开）</b></summary>
@@ -190,7 +201,6 @@ for res in output:
 <li><b>字典</b>，key为<b>int</b>类型的<code>cls_id</code>，value为<b>tuple</b>，如 <code>{0: (1.1, 2.0)}</code></li>
 <li><b>None</b>，不指定，将默认使用PaddleX官方模型配置</li>
 </ul>
-PP-DocLayoutV4 的四边形边界和多边形模型的 <code>polygon_points</code> 也会以检测框中心为中心，沿原图横、纵轴同步缩放；缩放后的边界用于普通裁图和几何矫正裁图。本模块的重叠框过滤基于缩放前的预测几何进行；PaddleOCR-VL 产线关闭了本模块的重叠框过滤，改为在缩放后的边界上过滤，因此当 <code>layout_unclip_ratio</code> 不为 1 时，产线保留的版面块可能与本模块的输出不同。
 </td>
 <td>None</td>
 </tr>

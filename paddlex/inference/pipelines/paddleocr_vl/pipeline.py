@@ -47,7 +47,7 @@ from ..layout_parsing.title_level import assign_levels_to_parsing_res
 from ..layout_parsing.utils import construct_img_path, gather_imgs
 from .result import BaseResult, PaddleOCRVLBlock, PaddleOCRVLResult
 
-from .uilts import (
+from .utils import (
     convert_otsl_to_html,
     crop_margin,
     filter_overlap_boxes,
@@ -385,12 +385,16 @@ class _PaddleOCRVLPipeline(BasePipeline):
         }
 
     @benchmark.timeit_with_options(name="paddleocr_vl_merge_adjacent_blocks")
-    def _paddleocr_vl_merge_adjacent_blocks(self, blocks_for_img, layout_prep_cfg):
+    def _paddleocr_vl_merge_adjacent_blocks(
+        self, blocks_for_img, layout_prep_cfg, correction=None
+    ):
         if not layout_prep_cfg["merge_layout_blocks"]:
             return blocks_for_img
         return merge_blocks(
             blocks_for_img,
             non_merge_labels=layout_prep_cfg["image_labels"] + ["table"],
+            layout_shape_mode=layout_prep_cfg["layout_shape_mode"],
+            page_correction=correction,
         )
 
     def _paddleocr_vl_collect_page_vlm_entries_core(
@@ -521,7 +525,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_det_res = filter_overlap_boxes(
             layout_det_res, layout_prep_cfg["layout_shape_mode"]
         )
-        use_xycut = layout_prep_cfg["use_xycut"]
+        use_xycut = layout_prep_cfg.get("use_xycut", False)
         if use_xycut:
             layout_det_res["boxes"] = xycut_sort(layout_det_res["boxes"])
         boxes = layout_det_res["boxes"]
@@ -535,6 +539,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
             blocks_for_img = merge_blocks(
                 blocks_for_img,
                 non_merge_labels=layout_prep_cfg["image_labels"] + ["table"],
+                layout_shape_mode=layout_prep_cfg["layout_shape_mode"],
+                page_correction=correction,
             )
         (
             page_vlm_entries,
@@ -573,7 +579,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             correction=correction,
         )
         blocks_for_img = self._paddleocr_vl_merge_adjacent_blocks(
-            blocks_for_img, layout_prep_cfg
+            blocks_for_img, layout_prep_cfg, correction
         )
         (
             page_vlm_entries,
@@ -659,7 +665,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         elif vlm_kwargs.get("max_new_tokens", None) is None:
             vlm_kwargs["max_new_tokens"] = 4096
 
-        table_post_process = layout_prep_cfg["table_post_process"]
+        table_post_process = layout_prep_cfg.get("table_post_process", False)
         if not table_post_process:
             vlm_kwargs["max_new_tokens"] = 16000
 
@@ -716,7 +722,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         image_path_to_obj_map = {}
         table_blocks = []
         use_layout_detection = layout_prep_cfg["use_layout_detection"]
-        table_post_process = layout_prep_cfg["table_post_process"]
+        table_post_process = layout_prep_cfg.get("table_post_process", False)
         for i, blocks_for_img in enumerate(blocks):
             parsing_res_list = []
             table_res_list = []
@@ -1021,6 +1027,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_gt_dir: Optional[str] = None,
         use_xycut: Optional[bool] = False,
         table_post_process: Optional[bool] = True,
+        layout_split_formula: bool = False,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -1042,6 +1049,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 If it's a tuple of two numbers, then they are used separately for width and height respectively.
                 If it's None, then no unclipping will be performed.
             layout_merge_bboxes_mode (Optional[str], optional): The mode for merging bounding boxes. Defaults to None.
+            layout_split_formula (bool): Split clearly separated display-formula rows before recognition. Defaults to False.
             layout_shape_mode (Optional[str], optional): The mode for layout shape. Defaults to "auto", [ "rect", "quad","poly", "auto"] are supported.
             use_layout_deform (Optional[bool]): Whether to rectify each crop handed
                 to the recognition model with the page deformation the layout
@@ -1237,6 +1245,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
                                 layout_merge_bboxes_mode=layout_merge_bboxes_mode,
                                 layout_shape_mode=layout_shape_mode,
                                 filter_overlap_boxes=False,
+                                **(
+                                    {"layout_split_formula": True}
+                                    if layout_split_formula
+                                    else {}
+                                ),
                             )
                         )
 
