@@ -451,15 +451,19 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 elif "formula" in block_label and block_label != "formula_number":
                     text_prompt = "Formula Recognition:"
                     if self.vl_rec_model.model_name == "MinerU2.5":
-                            text_prompt = "\nFormula Recognition:"
+                        text_prompt = "\nFormula Recognition:"
                     if self.vl_rec_model.model_name == "Dolphinv2":
-                            text_prompt = "Read formula in the image."
+                        text_prompt = "Read formula in the image."
                     if self.vl_rec_model.model_name == "MonkeyOCR-pro-3B":
-                            text_prompt = "Please write out the expression of the formula in the image using LaTeX format."
-                    crop_img = crop_margin(block_img)
-                    w, h, _ = crop_img.shape
-                    if w > 2 and h > 2:
-                        block_img = crop_img
+                        text_prompt = (
+                            "Please write out the expression of the formula in "
+                            "the image using LaTeX format."
+                        )
+                    if layout_prep_cfg["use_crop_margin"]:
+                        crop_img = crop_margin(block_img)
+                        w, h, _ = crop_img.shape
+                        if w > 2 and h > 2:
+                            block_img = crop_img
                     blk_min_pixels = layout_prep_cfg["formula_min_pixels"]
                     blk_max_pixels = layout_prep_cfg["formula_max_pixels"]
                 elif block_label == "spotting":
@@ -877,6 +881,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_deform_min_roll=DEFAULT_MIN_ROLL,
         layout_deform_min_shear=DEFAULT_MIN_SHEAR,
         layout_deform_min_keystone=DEFAULT_MIN_KEYSTONE,
+        use_crop_margin=True,
     ):
         if vlm_kwargs is None:
             vlm_kwargs = {}
@@ -928,6 +933,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             "use_xycut": use_xycut,
             "table_post_process": table_post_process,
             "use_layout_detection": use_layout_detection,
+            "use_crop_margin": use_crop_margin,
         }
 
         num_pages = len(images)
@@ -1028,6 +1034,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_xycut: Optional[bool] = False,
         table_post_process: Optional[bool] = True,
         layout_split_formula: bool = False,
+        use_crop_margin: Optional[bool] = True,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -1082,6 +1089,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             max_new_tokens (Optional[int]): The maximum number of new tokens. Default is None.
             merge_layout_blocks (Optional[bool]): Whether to merge layout blocks. Default is None.
             markdown_ignore_labels (Optional[list[str]]): The list of ignored markdown labels. Default is None.
+            use_crop_margin (Optional[bool]): Whether to crop margins before formula recognition. Default is True.
             **kwargs (Any): Additional settings to extend functionality.
 
         Returns:
@@ -1353,6 +1361,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     if layout_deform_min_keystone is None
                     else layout_deform_min_keystone
                 ),
+                use_crop_margin=use_crop_margin,
             )
 
             for (
