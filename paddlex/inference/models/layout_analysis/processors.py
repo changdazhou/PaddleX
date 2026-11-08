@@ -21,6 +21,7 @@ from ....utils import logging
 from ....utils.deps import function_requires_deps, is_dep_available
 from ...utils.benchmark import benchmark
 from ..object_detection.processors import check_containment, nms
+from .formula_split import split_formula_boxes
 from .utils import compute_reading_order
 
 if is_dep_available("opencv-contrib-python"):
@@ -865,6 +866,7 @@ class LayoutAnalysisProcess:
         qi: Optional[ndarray] = None,
         rel_logits: Optional[ndarray] = None,
         roor_logits: Optional[ndarray] = None,
+        formula_candidates: Optional[List[dict]] = None,
     ) -> Boxes:
         """Apply post-processing to the detection boxes.
 
@@ -876,6 +878,8 @@ class LayoutAnalysisProcess:
             qi (ndarray, optional): The query index [N] of each box, for models
                 whose reading order is decoded here from the pairwise
                 ``rel_logits`` and ``roor_logits`` [Q, Q].
+            formula_candidates (list, optional): Output accumulator for formula
+                candidates after threshold/NMS and before containment filtering.
 
         Returns:
             Boxes: The post-processed detection boxes.
@@ -954,6 +958,24 @@ class LayoutAnalysisProcess:
             is_large[is_image] = areas > area_thres * img_w * img_h
             if not is_large.all():
                 boxes, keep = boxes[~is_large], keep[~is_large]
+
+        # Save V4 row candidates before a "large" policy suppresses them.
+        # Restrict this path to quad detectors; segmentation masks need their
+        # own geometry extraction and continue using the image-only splitter.
+        if (
+            formula_candidates is not None
+            and quad is not None
+            and "display_formula" in self.labels
+        ):
+            formula_mask = boxes[:, 0] == self.labels.index("display_formula")
+            formula_candidates.extend(
+                restructured_boxes(
+                    boxes[formula_mask, :6],
+                    self.labels,
+                    img_size,
+                    quad=quad[keep[formula_mask]],
+                )
+            )
 
         if layout_merge_bboxes_mode:
             formula_index = (
@@ -1058,12 +1080,15 @@ class LayoutAnalysisProcess:
         layout_shape_mode: Optional[str] = None,
         filter_overlap_boxes: Optional[bool] = None,
         skip_order_labels: Optional[List[str]] = None,
+        layout_split_formula: bool = False,
     ) -> List[Boxes]:
         """Apply the post-processing to a batch of outputs.
 
         Args:
             batch_outputs (List[dict]): The list of detection outputs.
             datas (List[dict]): The list of input data.
+            layout_split_formula (bool): Conservatively split displayed formulas
+                into separated ink rows using the original image. Defaults to False.
 
         Returns:
             List[Boxes]: The list of post-processed detection boxes.
@@ -1089,6 +1114,7 @@ class LayoutAnalysisProcess:
                     )
                 masks = None
                 polygon_points = None
+            formula_candidates = [] if layout_split_formula else None
             boxes = self.apply(
                 output["boxes"],
                 data["ori_img_size"],
@@ -1103,9 +1129,12 @@ class LayoutAnalysisProcess:
                 qi=output.get("qi"),
                 rel_logits=output.get("rel_logits"),
                 roor_logits=output.get("roor_logits"),
+                formula_candidates=formula_candidates,
             )
             if filter_overlap_boxes:
                 boxes = filter_boxes(boxes, current_layout_shape_mode)
+            if layout_split_formula:
+                boxes = split_formula_boxes(data["ori_img"], boxes, formula_candidates)
             skip_order_labels = (
                 skip_order_labels
                 if skip_order_labels is not None

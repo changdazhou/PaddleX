@@ -177,6 +177,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
         layout_shape_mode: Optional[str] = "auto",
         filter_overlap_boxes: Optional[bool] = True,
         skip_order_labels: Optional[List[str]] = None,
+        layout_split_formula: bool = False,
     ):
         """
         Process a batch of data through the preprocessing, inference, and postprocessing.
@@ -190,6 +191,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
             layout_shape_mode (Optional[str], optional): The mode for layout shape. Defaults to "auto", [ "rect", "quad","poly", "auto"]. are supported.
             filter_overlap_boxes (Optional[bool], optional): Whether to filter out overlap boxes. Defaults to True.
             skip_order_labels (Optional[List[str]], optional): The labels to skip order. Defaults to None.
+            layout_split_formula (bool): Split clearly separated display-formula rows. Defaults to False.
 
         Returns:
             dict: A dictionary containing the input path, raw image, class IDs, scores, and label names
@@ -220,6 +222,7 @@ class LayoutAnalysisRunnerPredictor(DetRunnerPredictor):
             layout_shape_mode=layout_shape_mode,
             filter_overlap_boxes=filter_overlap_boxes,
             skip_order_labels=skip_order_labels,
+            layout_split_formula=layout_split_formula,
         )
 
         result = {
@@ -367,6 +370,7 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
         layout_shape_mode: Optional[str] = "auto",
         filter_overlap_boxes: Optional[bool] = True,
         skip_order_labels: Optional[List[str]] = None,
+        layout_split_formula: bool = False,
     ):
         if not hasattr(self.image_processor, "post_process_object_detection"):
             raise RuntimeError(
@@ -397,6 +401,7 @@ class LayoutAnalysisTransformersPredictor(DetTransformersPredictor):
             layout_shape_mode=layout_shape_mode,
             filter_overlap_boxes=filter_overlap_boxes,
             skip_order_labels=skip_order_labels,
+            layout_split_formula=layout_split_formula,
         )
 
         result = {

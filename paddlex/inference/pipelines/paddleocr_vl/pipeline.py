@@ -985,6 +985,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         merge_layout_blocks: Optional[bool] = None,
         markdown_ignore_labels: Optional[List[str]] = None,
         vlm_extra_args: Optional[dict] = None,
+        layout_split_formula: bool = False,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -1006,6 +1007,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 If it's a tuple of two numbers, then they are used separately for width and height respectively.
                 If it's None, then no unclipping will be performed.
             layout_merge_bboxes_mode (Optional[str], optional): The mode for merging bounding boxes. Defaults to `None`.
+            layout_split_formula (bool): Split clearly separated display-formula rows before recognition. Defaults to False.
             layout_shape_mode (Optional[str], optional): The mode for layout shape. Defaults to "auto", [ "rect", "quad","poly", "auto"] are supported.
             use_layout_deform (Optional[bool]): Whether to rectify each crop handed
                 to the recognition model with the page deformation the layout
@@ -1122,6 +1124,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             layout_merge_bboxes_mode=layout_merge_bboxes_mode,
                             layout_shape_mode=layout_shape_mode,
                             filter_overlap_boxes=False,
+                            **(
+                                {"layout_split_formula": True}
+                                if layout_split_formula
+                                else {}
+                            ),
                         )
                     )
 
